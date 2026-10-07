@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0a0a12" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+    <title>Veyra Launcher</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="icon-rail" aria-label="Быстрая навигация">
+        <div class="rail-logo" title="Veyra Launcher"><img src="../assets/veyra-logo-64.png" alt="" /></div>
+        <div class="rail-nav">
+          <button class="rail-button is-active nav-link" type="button" data-view="play" aria-label="Играть" title="Играть">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 10.5 12 4l8 6.5v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-8Z" stroke="currentColor" stroke-width="1.7"/><path d="M9 20v-6h6v6" stroke="currentColor" stroke-width="1.7"/></svg>
+          </button>
+          <button class="rail-button" type="button" data-soon="Сборки" aria-label="Сборки" title="Сборки">
+            <svg viewBox="0 0 24 24" fill="none"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z" stroke="currentColor" stroke-width="1.7"/><path d="m4.5 7.8 7.5 4.3 7.5-4.3M12 12v9" stroke="currentColor" stroke-width="1.7"/></svg>
+          </button>
+          <button class="rail-button" type="button" id="refresh-button" aria-label="Обновить версии" title="Обновить версии">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M20 11a8 8 0 1 0-2.2 5.6M20 4v7h-7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="rail-button" type="button" data-soon="Журналы" aria-label="Журналы" title="Журналы">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M6 3h9l4 4v14H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.7"/><path d="M14 3v5h5M8 12h7M8 16h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </button>
+          <button class="rail-button nav-link" type="button" data-view="settings" aria-label="Настройки" title="Настройки">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 3.5v2m0 13v2m8.5-8.5h-2m-13 0h-2m14.5-6.5-1.4 1.4M7.4 16.6 6 18m12 0-1.4-1.4M7.4 7.4 6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.6"/></svg>
+          </button>
+        </div>
+        <div class="rail-bottom">
+          <button class="rail-button" type="button" data-soon="Discord" aria-label="Discord" title="Discord">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M7 7.5c3-1.7 7-1.7 10 0 1.2 1.8 2 4.2 2 6.5-1.2 1.6-2.3 2.5-4 3.2l-1-1.4m-4 0-1 1.4c-1.7-.7-2.8-1.6-4-3.2 0-2.3.8-4.7 2-6.5Z" stroke="currentColor" stroke-width="1.6"/><circle cx="9.3" cy="12.2" r="1" fill="currentColor"/><circle cx="14.7" cy="12.2" r="1" fill="currentColor"/></svg>
+          </button>
+          <button class="rail-avatar" type="button" data-soon="Профиль" title="Локальный профиль">V</button>
+        </div>
+      </aside>
+
+      <aside class="sidebar" aria-label="Меню Veyra">
+        <div class="brand">
+          <div class="brand-word">VEYRA</div>
+          <div class="brand-sub">LAUNCHER</div>
+        </div>
+
+        <nav class="navigation" aria-label="Основная навигация">
+          <button class="nav-item is-active nav-link" type="button" data-view="play">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none"><path d="m9 6 9 6-9 6V6Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></span>
+            <span><strong>Играть</strong><small>Быстрый запуск и управление</small></span>
+          </button>
+          <button class="nav-item" type="button" data-soon="Сборки">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z" stroke="currentColor" stroke-width="1.7"/></svg></span>
+            <span><strong>Сборки</strong><small>Локальные экземпляры</small></span>
+          </button>
+          <button class="nav-item" type="button" data-soon="Версии">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 4v12m0 0-4-4m4 4 4-4M5 20h14" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span><strong>Версии</strong><small>Установка и управление</small></span>
+          </button>
+          <button class="nav-item" type="button" data-soon="Журналы">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M6 3h9l4 4v14H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" stroke="currentColor" stroke-width="1.7"/><path d="M8 12h7M8 16h7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span>
+            <span><strong>Журналы</strong><small>Логи и отладка</small></span>
+          </button>
+          <button class="nav-item nav-link" type="button" data-view="settings">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3.5" stroke="currentColor" stroke-width="1.7"/><path d="M12 3.5v2m0 13v2m8.5-8.5h-2m-13 0h-2m14.5-6.5-1.4 1.4M7.4 16.6 6 18m12 0-1.4-1.4M7.4 7.4 6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+            <span><strong>Настройки</strong><small>Java, память и файлы</small></span>
+          </button>
+        </nav>
+
+        <div class="sidebar-spacer"></div>
+
+        <section class="sidebar-card storage-card">
+          <div class="sidebar-card-title"><strong>Хранилище</strong><span id="storage-label">локально</span></div>
+          <div class="storage-track"><span id="storage-fill"></span></div>
+          <div class="storage-meta"><span id="storage-used">Папка игры</span><span id="storage-total">Veyra</span></div>
+        </section>
+
+        <section class="sidebar-card system-card">
+          <div class="sidebar-card-title"><strong>Система</strong><span class="online-dot"></span></div>
+          <div class="system-line"><span>Java</span><b id="sidebar-java">Авто</b></div>
+          <div class="system-line"><span>Память</span><b id="sidebar-memory">4 ГБ</b></div>
+          <div class="system-line"><span>Версий</span><b id="sidebar-versions">0</b></div>
+          <div class="system-line"><span>ОС</span><b>Windows</b></div>
+        </section>
+      </aside>
+
+      <div class="main-column">
+        <header class="topbar">
+          <div class="search-box">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="1.7"/><path d="m16 16 4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+            <input id="version-search" type="text" placeholder="Поиск сборок, версий, модов..." aria-label="Поиск" />
+            <kbd>Ctrl K</kbd>
+          </div>
+          <div class="top-actions">
+            <button class="top-primary" type="button" id="create-instance"><span>＋</span> Создать сборку</button>
+            <button class="top-secondary" type="button" id="import-instance"><span>⇩</span> Импорт <span class="chevron">⌄</span></button>
+          </div>
+          <div class="window-controls" aria-label="Управление окном">
+            <button type="button" id="window-minimize" aria-label="Свернуть">—</button>
+            <button type="button" id="window-maximize" aria-label="Развернуть">□</button>
+            <button type="button" id="window-close" class="close" aria-label="Закрыть">×</button>
+          </div>
+        </header>
+
+        <div class="error-banner" id="error-banner" role="alert" hidden>
+          <span class="error-icon">!</span>
+          <div><strong>Что-то пошло не так</strong><p id="error-message"></p></div>
+          <button type="button" id="dismiss-error" aria-label="Скрыть ошибку">×</button>
+        </div>
+
+        <main class="content">
+          <div class="view play-layout" id="play-view">
+            <section class="dashboard-main">
+              <section class="hero-card">
+                <div class="hero-image"></div>
+                <div class="hero-shade"></div>
+                <div class="hero-content">
+                  <div class="hero-topline">
+                    <div class="instance-thumb"><img src="../assets/veyra-logo-64.png" alt="" /></div>
+                    <div class="hero-title-block">
+                      <span class="loader-badge">VANILLA</span>
+                      <h1 id="hero-title">Minecraft</h1>
+                      <p id="hero-path">Локальная сборка Veyra</p>
+                    </div>
+                    <div class="hero-version-badge"><span id="hero-version">Minecraft</span><small>Veyra profile</small></div>
+                  </div>
+
+                  <p class="hero-description">Чистая Minecraft Java Edition в локальном профиле. Выбери версию — Veyra сама скачает всё необходимое и запустит игру.</p>
+
+                  <div class="hero-actions">
+                    <button class="play-button" type="button" id="main-action" disabled><span id="main-action-icon">▶</span><span id="main-action-label">Подготовка…</span></button>
+                    <div class="version-picker select-wrap"><select id="version-select" aria-describedby="version-meta"><option value="">Загрузка версий…</option></select></div>
+                    <button class="square-button nav-link" type="button" data-view="settings" title="Настройки запуска" aria-label="Настройки запуска">
+                      <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3.5" stroke="currentColor" stroke-width="1.7"/><path d="M12 3.5v2m0 13v2m8.5-8.5h-2m-13 0h-2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                    </button>
+                    <button class="square-button" type="button" id="open-folder-home" title="Открыть папку" aria-label="Открыть папку">
+                      <svg viewBox="0 0 24 24" fill="none"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-11Z" stroke="currentColor" stroke-width="1.7"/></svg>
+                    </button>
+                  </div>
+                  <div class="hero-hint"><span id="version-meta">Получаем список версий</span><span id="action-hint">Проверяем доступные версии</span></div>
+
+                  <div class="installation-progress" id="installation-progress" hidden>
+                    <div class="progress-heading"><strong id="progress-title">Подготовка…</strong><span id="progress-percent">0%</span></div>
+                    <div class="progress-track" id="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span id="progress-fill"></span></div>
+                    <div class="progress-foot"><p id="progress-message">Подождите немного</p><button class="cancel-button" type="button" id="cancel-button" hidden>Отменить</button></div>
+                  </div>
+
+                  <div class="hero-stats">
+                    <div><span class="stat-icon">◇</span><small>Профиль</small><strong id="hero-profile">Локальный</strong></div>
+                    <div><span class="stat-icon">◷</span><small>Память</small><strong id="hero-memory">4 ГБ</strong></div>
+                    <div><span class="stat-icon">▤</span><small>Java</small><strong id="hero-java">Авто</strong></div>
+                    <div><span class="stat-icon">✣</span><small>Модов</small><strong>0 · vanilla</strong></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="library-panel">
+                <div class="library-tabs">
+                  <button class="library-tab is-active" type="button">◈ <span>Мои сборки</span><b>1</b></button>
+                  <button class="library-tab" type="button" data-soon="Установка версий">↓ <span>Установить версию</span></button>
+                  <button class="library-tab" type="button" data-soon="Моды">♧ <span>Моды</span></button>
+                  <button class="library-tab" type="button" data-soon="Ресурс-паки">▧ <span>Ресурс-паки</span></button>
+                  <button class="library-tab" type="button" data-soon="Шейдеры">☼ <span>Шейдеры</span></button>
+                  <div class="tabs-spacer"></div>
+                  <button class="view-toggle is-active" type="button" aria-label="Плитка">▦</button>
+                  <button class="view-toggle" type="button" aria-label="Список">☷</button>
+                </div>
+                <div class="instance-grid">
+                  <button class="instance-card is-selected" type="button" id="local-instance-card">
+                    <div class="instance-cover"><img src="../assets/veyra-hero.jpg" alt="" /></div>
+                    <div class="instance-card-body"><strong id="instance-card-title">Vanilla</strong><span id="instance-card-version">Minecraft</span><small><i></i><span id="instance-card-status">Готово к запуску</span></small></div>
+                    <span class="instance-more">•••</span>
+                  </button>
+                  <button class="instance-card ghost-card" type="button" id="new-instance-card">
+                    <span class="ghost-plus">＋</span><strong>Создать новую сборку</strong><small>Пока в разработке</small>
+                  </button>
+                </div>
+              </section>
+
+              <div class="activity-line" aria-live="polite"><span class="activity-dot"></span><span id="last-activity">Готовим Veyra…</span></div>
+            </section>
+
+            <aside class="dashboard-side">
+              <section class="side-panel quick-actions-panel">
+                <h2>Быстрые действия</h2>
+                <button class="quick-action" type="button" id="quick-install"><span>↓</span> Установить выбранную версию</button>
+                <button class="quick-action" type="button" id="quick-import"><span>⇧</span> Импортировать сборку</button>
+                <button class="quick-action" type="button" id="quick-folder"><span>□</span> Открыть папку instances</button>
+                <button class="quick-action nav-link" type="button" data-view="settings"><span>⚙</span> Глобальные настройки</button>
+              </section>
+
+              <section class="side-panel running-panel">
+                <h2>Запущенная игра</h2>
+                <div class="running-game"><div class="mc-icon">⛏</div><div><strong>Minecraft</strong><span id="running-status">Не запущена</span></div></div>
+                <button class="running-action" type="button" id="running-action" disabled>▶ Запустить игру</button>
+              </section>
+
+              <section class="side-panel performance-panel">
+                <h2>Java и производительность</h2>
+                <div class="perf-row"><span>Java</span><strong id="quick-java">По умолчанию</strong></div>
+                <div class="perf-row"><span>Выделено памяти</span><strong id="quick-memory">4 ГБ</strong></div>
+                <div class="memory-track"><span id="memory-fill"></span></div>
+                <div class="perf-chips"><span>CPU <b>Auto</b></span><span>RAM <b id="perf-ram">4 GB</b></span><span>GPU <b>Auto</b></span></div>
+              </section>
+
+              <section class="side-panel logs-panel">
+                <div class="panel-title-row"><h2>Последние журналы</h2><button type="button" data-soon="Все журналы">Открыть все</button></div>
+                <div class="mini-logs" id="mini-logs">
+                  <div><i class="ok"></i><time>сейчас</time><span>Veyra готовится к запуску</span></div>
+                </div>
+              </section>
+            </aside>
+          </div>
+
+          <div class="view settings-view" id="settings-view" hidden>
+            <div class="settings-header">
+              <div><span class="settings-eyebrow">VEYRA / SETTINGS</span><h1>Настройки лаунчера</h1><p>Java, память, папка игры и список версий — без лишней жопоебли.</p></div>
+              <button class="back-button nav-link" type="button" data-view="play">← Вернуться к игре</button>
+            </div>
+
+            <div class="settings-grid">
+              <section class="settings-card">
+                <div class="settings-card-head"><span>01</span><div><h2>Среда запуска</h2><p>Java и объём оперативной памяти</p></div></div>
+                <div class="form-field">
+                  <label for="java-path">Путь к Java</label>
+                  <div class="input-with-button"><input id="java-path" type="text" spellcheck="false" placeholder="Автоматический поиск Java" /><button type="button" id="pick-java">Обзор…</button></div>
+                  <small>Оставь пустым — Veyra попробует найти Java самостоятельно.</small>
+                </div>
+                <div class="form-field">
+                  <label for="memory-gb">Оперативная память</label>
+                  <div class="number-input"><input id="memory-gb" type="number" min="1" max="64" step="1" inputmode="numeric" /><span>ГБ</span></div>
+                  <small>Для обычной ванили 4–6 ГБ обычно хватает.</small>
+                </div>
+              </section>
+
+              <section class="settings-card">
+                <div class="settings-card-head"><span>02</span><div><h2>Версии и файлы</h2><p>Где лежит Minecraft и что показывать</p></div></div>
+                <div class="form-field">
+                  <label for="game-directory">Папка игры</label>
+                  <div class="input-with-button"><input id="game-directory" type="text" spellcheck="false" placeholder="Папка по умолчанию" /><button type="button" id="pick-directory">Обзор…</button></div>
+                  <button class="inline-link" type="button" id="open-folder-settings">Открыть папку игры ↗</button>
+                </div>
+                <label class="toggle-row" for="show-snapshots"><span><strong>Показывать snapshots</strong><small>Тестовые версии Minecraft появятся в списке</small></span><input id="show-snapshots" type="checkbox" role="switch" /><i></i></label>
+              </section>
+
+              <section class="settings-card profile-card">
+                <div class="settings-card-head"><span>03</span><div><h2>Локальный профиль</h2><p>Имя игрока для офлайн-запуска</p></div></div>
+                <div class="form-field">
+                  <label for="player-name">Имя игрока</label>
+                  <input id="player-name" type="text" maxlength="16" spellcheck="false" autocomplete="off" placeholder="Введите никнейм" />
+                  <small>3–16 латинских букв, цифр или _. Лицензионные серверы без Microsoft-входа недоступны.</small>
+                </div>
+              </section>
+            </div>
+
+            <div class="settings-footer">
+              <span id="quick-directory">Папка игры не выбрана</span>
+              <button class="save-settings" type="button" id="save-settings">Сохранить настройки</button>
+            </div>
+          </div>
+        </main>
+
+        <footer class="footerbar">
+          <span>Veyra Launcher <b id="app-version">0.1.0</b></span>
+          <span class="footer-status"><i></i><span class="header-status"><span id="header-status-text">Подключение…</span></span></span>
+          <div class="footer-links"><button type="button" id="footer-update">↻ Проверить обновления</button><button type="button" data-soon="Документация">▣ Документация</button><button type="button" data-soon="Сообщество">☯ Сообщество</button></div>
+        </footer>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+    <script src="./renderer.js"></script>
+  </body>
+</html>
