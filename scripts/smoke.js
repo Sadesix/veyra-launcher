@@ -1,47 +1,117 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { _electron: electron } = require('playwright-core');
 
 async function main() {
   const executablePath = process.argv[2] ? path.resolve(process.argv[2]) : undefined;
+  const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-smoke-'));
   const app = await electron.launch({
     executablePath,
     args: executablePath ? [] : ['.'],
     cwd: path.join(__dirname, '..'),
+    env: { ...process.env, VEYRA_TEST_DATA_DIR: dataDirectory },
     timeout: 120000,
   });
   try {
     const page = await app.firstWindow();
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
-    await page.locator('#main-action').waitFor();
-
-    const state = await page.evaluate(() => window.launcher.getState());
-    assert.equal(typeof state.settings.playerName, 'string');
-    assert.ok(Array.isArray(state.versions));
-
-    await page.locator('.nav-item[data-view="settings"]').click();
-    await page.locator('#java-path').waitFor({ state: 'visible' });
-    await page.locator('.nav-item[data-view="play"]').click();
+    await page.locator('#view-title').waitFor();
+    const initial = await page.evaluate(() => window.launcher.getState());
+    assert.equal(initial.instances.length, 0);
+    assert.equal(initial.dataDirectory.toLowerCase(), dataDirectory.toLowerCase());
+    assert.equal(await page.locator('.icon-rail').count(), 1);
+    assert.equal(await page.locator('.nav-item').count(), 0);
 
     const versions = await page.evaluate(() => window.launcher.refreshVersions());
-    assert.ok(versions.length > 0, 'Список версий пуст');
     assert.ok(versions.some((version) => version.type === 'release'));
+
+    await page.locator('#create-top').click();
+    await page.locator('#create-version').selectOption('1.21.8');
+    for (const loader of ['fabric', 'neoforge', 'forge']) {
+      await page.locator('[data-loader="' + loader + '"]').click();
+      await page.waitForFunction(() => {
+        const select = document.getElementById('create-loader-version');
+        return select.options.length > 0 && Boolean(select.options[0].value);
+      }, null, { timeout: 45000 });
+      assert.ok(await page.locator('#create-loader-version option').count() > 0, loader);
+    }
+    await page.locator('[data-loader="vanilla"]').click();
+    await page.locator('[data-close="create-dialog"]').first().click();
+
+    const instance = await page.evaluate(() => window.launcher.createInstance({
+      name: 'Smoke World',
+      minecraftVersion: '1.21.8',
+      loader: 'vanilla',
+    }));
+    assert.ok(fs.existsSync(path.join(instance.directory, 'mods')));
+    assert.ok(fs.existsSync(path.join(instance.directory, 'saves')));
+    await page.locator('#hero-name').waitFor();
+    assert.equal(await page.locator('#hero-name').textContent(), 'Smoke World');
+    await page.locator('#hero-edit').click();
+    await app.evaluate(({ dialog }, imagePath) => {
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [imagePath] });
+    }, path.join(__dirname, '..', 'assets', 'veyra-hero.jpg'));
+    await page.locator('#edit-cover').click();
+    await page.locator('[data-accent="rose"]').click();
+    await page.locator('#edit-favorite').check();
+    await page.locator('#edit-name').fill('Renamed World');
+    await page.locator('#edit-note').fill('Построить город над озером');
+    await page.locator('#instance-form button[type="submit"]').click();
+    const customized = (await page.evaluate(() => window.launcher.getState())).instances[0];
+    assert.equal(customized.name, 'Renamed World');
+    assert.equal(customized.accent, 'rose');
+    assert.equal(customized.favorite, true);
+    assert.equal(customized.note, 'Построить город над озером');
+    assert.ok(customized.coverUrl);
+    assert.ok(fs.existsSync(path.join(instance.directory, 'cover.jpg')));
+    const coverLoads = await page.evaluate((url) => new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => resolve(true);
+      image.onerror = () => resolve(false);
+      image.src = url;
+    }), customized.coverUrl);
+    assert.ok(coverLoads, 'Не загрузилась обложка экземпляра');
+
+    await page.locator('.rail-button[data-view="settings"]').click();
+    await page.locator('#player-name').fill('SmokePlayer');
+    await page.locator('#memory-gb').fill('6');
+    await page.locator('#save-settings').click();
+    const updated = await page.evaluate(() => window.launcher.getState());
+    assert.equal(updated.settings.playerName, 'SmokePlayer');
+    assert.equal(updated.settings.memoryGb, 6);
+    await page.locator('.rail-button[data-view="home"]').click();
+    assert.equal(await page.locator('#capsule-note').textContent(), 'Построить город над озером');
+    await page.reload();
+    await page.locator('#hero-name').waitFor();
+    assert.equal(await page.locator('#hero-name').textContent(), 'Renamed World');
 
     const output = path.join(__dirname, '..', 'test-output');
     fs.mkdirSync(output, { recursive: true });
+    assert.equal(await page.locator('dialog[open]').count(), 0, 'Открыто модальное окно перед снимком');
+    await page.locator('#toast').waitFor({ state: 'hidden' });
     await page.screenshot({ path: path.join(output, 'launcher.png'), fullPage: true });
-    await page.locator('.nav-item[data-view="settings"]').click();
+    await page.locator('.rail-button[data-view="settings"]').click();
     await page.screenshot({ path: path.join(output, 'settings.png'), fullPage: true });
-    assert.deepEqual(errors, [], `Ошибки интерфейса: ${errors.join('; ')}`);
-    process.stdout.write(`OK: ${versions.length} версий, интерфейс и IPC работают.\n`);
+    await page.locator('.rail-button[data-view="logs"]').click();
+    await page.locator('#logs-content').waitFor({ state: 'visible' });
+    await page.locator('.rail-button[data-view="home"]').click();
+    await page.locator('#hero-edit').click();
+    await page.locator('#remove-instance').click();
+    await page.locator('#confirm-remove').click();
+    const removed = await page.evaluate(() => window.launcher.getState());
+    assert.equal(removed.instances.length, 0);
+    assert.ok(!fs.existsSync(instance.directory));
+    assert.deepEqual(errors, [], 'Ошибки интерфейса: ' + errors.join('; '));
+    process.stdout.write('OK: версии, 3 загрузчика, CRUD экземпляра, изоляция файлов, настройки и интерфейс.\n');
   } finally {
     await app.close();
   }
 }
 
 main().catch((error) => {
-  process.stderr.write(`${error.stack || error}\n`);
+  process.stderr.write((error.stack || error) + '\n');
   process.exitCode = 1;
 });

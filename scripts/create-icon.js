@@ -1,25 +1,26 @@
-const fs = require('node:fs');
+const fs = require('node:fs/promises');
 const path = require('node:path');
+const sharp = require('sharp');
 
-const assets = path.join(__dirname, '..', 'assets');
-const source = path.join(assets, 'veyra-logo-256.png');
-const png = fs.readFileSync(source);
-
-// Windows ICO can embed a PNG payload directly. This keeps the original
-// transparent Veyra dragon sharp without adding another image dependency.
-const header = Buffer.alloc(22);
-header.writeUInt16LE(0, 0); // reserved
-header.writeUInt16LE(1, 2); // icon
-header.writeUInt16LE(1, 4); // one image
-header[6] = 0;              // 256 px
-header[7] = 0;              // 256 px
-header[8] = 0;
-header[9] = 0;
-header.writeUInt16LE(1, 10);
-header.writeUInt16LE(32, 12);
-header.writeUInt32LE(png.length, 14);
-header.writeUInt32LE(22, 18);
-
-fs.copyFileSync(source, path.join(assets, 'icon.png'));
-fs.writeFileSync(path.join(assets, 'icon.ico'), Buffer.concat([header, png]));
-console.log('Veyra icons refreshed.');
+async function main() {
+  const assets = path.join(__dirname, '..', 'assets');
+  const source = path.join(assets, 'veyra-mark.svg');
+  const svg = await fs.readFile(source);
+  const render = (size) => sharp(svg, { density: 300 }).resize(size, size).png().toBuffer();
+  const [small, large] = await Promise.all([render(64), render(256)]);
+  await Promise.all([
+    fs.writeFile(path.join(assets, 'veyra-logo-64.png'), small),
+    fs.writeFile(path.join(assets, 'veyra-logo-256.png'), large),
+    fs.writeFile(path.join(assets, 'icon.png'), large),
+  ]);
+  const header = Buffer.alloc(22);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(1, 4);
+  header.writeUInt16LE(1, 10);
+  header.writeUInt16LE(32, 12);
+  header.writeUInt32LE(large.length, 14);
+  header.writeUInt32LE(22, 18);
+  await fs.writeFile(path.join(assets, 'icon.ico'), Buffer.concat([header, large]));
+  process.stdout.write('Veyra mark updated.\n');
+}
+main().catch((error) => { process.stderr.write((error.stack || error) + '\n'); process.exitCode = 1; });
