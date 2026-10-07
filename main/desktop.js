@@ -27,7 +27,11 @@ const dataDir = () => app.getPath('userData');
 const settingsFile = () => path.join(dataDir(), 'settings.json');
 const manifestFile = () => path.join(dataDir(), 'version-manifest.json');
 const logFile = () => path.join(dataDir(), 'launcher.log');
-const instancesDir = () => path.join(dataDir(), 'instances');
+const instancesDir = () => process.env.VEYRA_TEST_DATA_DIR
+  ? path.join(dataDir(), 'instances')
+  : path.join(app.getPath('documents'), 'Veyra Launcher', 'instances');
+const systemMemoryGb = () => Math.max(1, Math.round(os.totalmem() / 1024 ** 3));
+const maxMemoryGb = () => Math.max(1, systemMemoryGb() - 2);
 
 function broadcast(payload) {
   if (window && !window.isDestroyed()) window.webContents.send('launcher:event', payload);
@@ -60,7 +64,7 @@ function validName(value) {
 function defaultSettings() {
   return {
     playerName: 'Player',
-    memoryGb: 4,
+    memoryGb: Math.min(4, maxMemoryGb()),
     javaPath: '',
     showSnapshots: false,
     selectedInstanceId: '',
@@ -107,7 +111,7 @@ function sanitizeInstance(raw) {
     loaderVersion: typeof raw.loaderVersion === 'string' ? raw.loaderVersion : '',
     versionId: typeof raw.versionId === 'string' ? raw.versionId : '',
     directory: path.resolve(raw.directory),
-    memoryGb: Number.isInteger(raw.memoryGb) && raw.memoryGb >= 1 && raw.memoryGb <= 64 ? raw.memoryGb : null,
+    memoryGb: Number.isInteger(raw.memoryGb) && raw.memoryGb >= 1 ? Math.min(raw.memoryGb, maxMemoryGb()) : null,
     javaPath: typeof raw.javaPath === 'string' && path.isAbsolute(raw.javaPath) ? raw.javaPath : '',
     createdAt: raw.createdAt || new Date().toISOString(),
     lastPlayedAt: typeof raw.lastPlayedAt === 'string' ? raw.lastPlayedAt : '',
@@ -149,7 +153,7 @@ async function loadState() {
   const saved = await readJson(settingsFile(), {});
   settings = defaultSettings();
   if (/^[A-Za-z0-9_]{3,16}$/.test(saved.playerName || '')) settings.playerName = saved.playerName;
-  if (Number.isInteger(saved.memoryGb) && saved.memoryGb >= 1 && saved.memoryGb <= 64) settings.memoryGb = saved.memoryGb;
+  if (Number.isInteger(saved.memoryGb) && saved.memoryGb >= 1) settings.memoryGb = Math.min(saved.memoryGb, maxMemoryGb());
   if (typeof saved.javaPath === 'string' && (!saved.javaPath || path.isAbsolute(saved.javaPath))) settings.javaPath = saved.javaPath;
   settings.showSnapshots = Boolean(saved.showSnapshots);
   if (Array.isArray(saved.instances)) {
@@ -158,7 +162,7 @@ async function loadState() {
   } else if (validVersion(saved.selectedVersion || '')) {
     const legacy = sanitizeInstance({
       id: 'legacy',
-      name: 'Моя игра',
+      name: 'Моя сборка',
       minecraftVersion: saved.selectedVersion,
       loader: 'vanilla',
       directory: path.resolve(saved.gameDirectory || path.join(dataDir(), 'minecraft')),
@@ -218,7 +222,10 @@ function publicState() {
     } : null,
     runningInstanceId: gameProcess?.instanceId || null,
     appVersion: app.getVersion(),
+    systemMemoryGb: systemMemoryGb(),
+    maxMemoryGb: maxMemoryGb(),
     dataDirectory: dataDir(),
+    instancesDirectory: instancesDir(),
   };
 }
 
@@ -356,31 +363,33 @@ async function selectInstance(id) {
 async function updateInstance(id, patch) {
   const instance = requireInstance(id);
   if (!patch || typeof patch !== 'object') throw new Error('Некорректные настройки экземпляра');
+  const next = { ...instance };
   if (patch.name !== undefined) {
     if (!validName(patch.name)) throw new Error('Название: от 2 до 40 символов');
-    instance.name = patch.name.trim();
+    next.name = patch.name.trim();
   }
   if (patch.memoryGb !== undefined) {
-    if (patch.memoryGb !== null && (!Number.isInteger(Number(patch.memoryGb)) || Number(patch.memoryGb) < 1 || Number(patch.memoryGb) > 64)) {
-      throw new Error('Память: от 1 до 64 ГБ');
+    if (patch.memoryGb !== null && (!Number.isInteger(Number(patch.memoryGb)) || Number(patch.memoryGb) < 1 || Number(patch.memoryGb) > maxMemoryGb())) {
+      throw new Error('Память: от 1 до ' + maxMemoryGb() + ' ГБ на этом компьютере');
     }
-    instance.memoryGb = patch.memoryGb === null ? null : Number(patch.memoryGb);
+    next.memoryGb = patch.memoryGb === null ? null : Number(patch.memoryGb);
   }
   if (patch.javaPath !== undefined) {
     if (typeof patch.javaPath !== 'string' || (patch.javaPath && !path.isAbsolute(patch.javaPath))) {
       throw new Error('Укажите полный путь к Java');
     }
-    instance.javaPath = patch.javaPath;
+    next.javaPath = patch.javaPath;
   }
-  if (patch.favorite !== undefined) instance.favorite = Boolean(patch.favorite);
+  if (patch.favorite !== undefined) next.favorite = Boolean(patch.favorite);
   if (patch.note !== undefined) {
     if (typeof patch.note !== 'string' || patch.note.length > 180) throw new Error('Заметка: не более 180 символов');
-    instance.note = patch.note.trim();
+    next.note = patch.note.trim();
   }
   if (patch.accent !== undefined) {
     if (!['violet', 'blue', 'rose', 'amber'].includes(patch.accent)) throw new Error('Неизвестный цвет экземпляра');
-    instance.accent = patch.accent;
+    next.accent = patch.accent;
   }
+  Object.assign(instance, next);
   await persist();
   emitState();
   return { ...instance };
@@ -438,14 +447,16 @@ async function removeInstance(id) {
   if (activeOperation?.instanceId === id || gameProcess?.instanceId === id) {
     throw new Error('Сначала завершите установку или игру');
   }
-  const managed = path.resolve(instancesDir());
   const target = path.resolve(instance.directory);
+  const managed = [instancesDir(), path.join(dataDir(), 'instances')]
+    .map((root) => path.resolve(root))
+    .find((root) => path.dirname(target).toLowerCase() === root.toLowerCase());
   let movedTo = '';
-  if (!instance.legacy && path.dirname(target).toLowerCase() === managed.toLowerCase()) {
+  if (!instance.legacy && managed) {
     const stat = await fs.lstat(target).catch(() => null);
     if (stat?.isSymbolicLink()) throw new Error('Папка экземпляра является ссылкой');
     if (stat?.isDirectory()) {
-      const trash = path.join(dataDir(), 'trash');
+      const trash = path.join(path.dirname(managed), 'trash');
       await fs.mkdir(trash, { recursive: true });
       movedTo = path.join(trash, id + '-' + Date.now());
       await fs.rename(target, movedTo);
@@ -461,23 +472,27 @@ async function removeInstance(id) {
 
 async function saveSettings(patch) {
   if (!patch || typeof patch !== 'object') throw new Error('Некорректные настройки');
+  const next = { ...settings };
   if (patch.playerName !== undefined) {
     if (!/^[A-Za-z0-9_]{3,16}$/.test(patch.playerName)) throw new Error('Имя игрока: 3–16 латинских букв, цифр или _');
-    settings.playerName = patch.playerName;
+    next.playerName = patch.playerName;
   }
   if (patch.memoryGb !== undefined) {
     const memory = Number(patch.memoryGb);
-    if (!Number.isInteger(memory) || memory < 1 || memory > 64) throw new Error('Память: от 1 до 64 ГБ');
-    settings.memoryGb = memory;
+    if (!Number.isInteger(memory) || memory < 1 || memory > maxMemoryGb()) {
+      throw new Error('Память: от 1 до ' + maxMemoryGb() + ' ГБ на этом компьютере');
+    }
+    next.memoryGb = memory;
   }
   if (patch.javaPath !== undefined) {
     if (typeof patch.javaPath !== 'string' || (patch.javaPath && !path.isAbsolute(patch.javaPath))) {
       throw new Error('Укажите полный путь к Java');
     }
     if (patch.javaPath && !javaInfo(patch.javaPath)) throw new Error('Выбранная Java не запускается');
-    settings.javaPath = patch.javaPath;
+    next.javaPath = patch.javaPath;
   }
-  if (patch.showSnapshots !== undefined) settings.showSnapshots = Boolean(patch.showSnapshots);
+  if (patch.showSnapshots !== undefined) next.showSnapshots = Boolean(patch.showSnapshots);
+  settings = next;
   await persist();
   emitState();
   return publicState();
@@ -665,7 +680,8 @@ function registerIpc() {
   ipcMain.handle('launcher:pick-java', () => pickJava());
   ipcMain.handle('launcher:open-instance-folder', (_event, id) => openInstanceFolder(id));
   ipcMain.handle('launcher:open-data-folder', async () => {
-    const error = await shell.openPath(dataDir());
+    await fs.mkdir(instancesDir(), { recursive: true });
+    const error = await shell.openPath(instancesDir());
     if (error) throw new Error(error);
     return true;
   });

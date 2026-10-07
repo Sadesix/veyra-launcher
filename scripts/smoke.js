@@ -22,13 +22,25 @@ async function main() {
     const initial = await page.evaluate(() => window.launcher.getState());
     assert.equal(initial.instances.length, 0);
     assert.equal(initial.dataDirectory.toLowerCase(), dataDirectory.toLowerCase());
+    assert.equal(initial.instancesDirectory.toLowerCase(), path.join(dataDirectory, 'instances').toLowerCase());
     assert.equal(await page.locator('.icon-rail').count(), 1);
     assert.equal(await page.locator('.nav-item').count(), 0);
+    assert.equal(await page.locator('.wordmark').textContent(), 'veyra');
+    assert.equal(await page.locator('.hero-atmosphere').count(), 0);
+    assert.ok(initial.maxMemoryGb <= initial.systemMemoryGb);
 
     const versions = await page.evaluate(() => window.launcher.refreshVersions());
     assert.ok(versions.some((version) => version.type === 'release'));
 
     await page.locator('#create-top').click();
+    const iconState = await page.locator('.loader-choice .brand-icon').evaluateAll((images) =>
+      images.map((image) => ({ loaded: image.complete && image.naturalWidth > 0, source: image.getAttribute('src') })));
+    assert.equal(iconState.length, 4);
+    assert.ok(iconState.every((item) => item.loaded), JSON.stringify(iconState));
+    const output = path.join(__dirname, '..', 'test-output');
+    fs.mkdirSync(output, { recursive: true });
+    await page.waitForTimeout(380);
+    await page.screenshot({ path: path.join(output, 'create.png') });
     await page.locator('#create-version').selectOption('1.21.8');
     for (const loader of ['fabric', 'neoforge', 'forge']) {
       await page.locator('[data-loader="' + loader + '"]').click();
@@ -48,8 +60,22 @@ async function main() {
     }));
     assert.ok(fs.existsSync(path.join(instance.directory, 'mods')));
     assert.ok(fs.existsSync(path.join(instance.directory, 'saves')));
+    assert.equal(path.dirname(instance.directory).toLowerCase(), initial.instancesDirectory.toLowerCase());
     await page.locator('#hero-name').waitFor();
     assert.equal(await page.locator('#hero-name').textContent(), 'Smoke World');
+    await page.keyboard.press('F2');
+    await page.locator('#hero-rename-input').fill('Quick Name');
+    await page.locator('#hero-rename-input').press('Enter');
+    await page.waitForFunction(() => document.getElementById('hero-name').textContent === 'Quick Name');
+    assert.equal(await page.locator('#hero-name').textContent(), 'Quick Name');
+    const hero = page.locator('#hero-card');
+    const rect = await hero.boundingBox();
+    await page.mouse.move(rect.x + 30, rect.y + 30);
+    const leftParallax = await hero.evaluate((node) => node.style.getPropertyValue('--scene-x'));
+    await page.mouse.move(rect.x + rect.width - 30, rect.y + 30);
+    const rightParallax = await hero.evaluate((node) => node.style.getPropertyValue('--scene-x'));
+    assert.notEqual(leftParallax, rightParallax);
+    assert.equal(await page.locator('#hero-image').evaluate((node) => getComputedStyle(node).animationName), 'none');
     await page.locator('#hero-edit').click();
     await app.evaluate(({ dialog }, imagePath) => {
       dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [imagePath] });
@@ -59,6 +85,9 @@ async function main() {
     await page.locator('#edit-favorite').check();
     await page.locator('#edit-name').fill('Renamed World');
     await page.locator('#edit-note').fill('Построить город над озером');
+    assert.equal(await page.locator('#edit-memory').getAttribute('max'), String(initial.maxMemoryGb));
+    assert.ok((await page.locator('#edit-java-auto').boundingBox()).width < 60);
+    await page.screenshot({ path: path.join(output, 'instance.png') });
     await page.locator('#instance-form button[type="submit"]').click();
     const customized = (await page.evaluate(() => window.launcher.getState())).instances[0];
     assert.equal(customized.name, 'Renamed World');
@@ -76,24 +105,31 @@ async function main() {
     assert.ok(coverLoads, 'Не загрузилась обложка экземпляра');
 
     await page.locator('.rail-button[data-view="settings"]').click();
+    assert.equal(await page.locator('#memory-range').getAttribute('max'), String(initial.maxMemoryGb));
+    assert.equal(await page.locator('#memory-gb').getAttribute('max'), String(initial.maxMemoryGb));
+    assert.match(await page.locator('.toggle-row').textContent(), /Snapshots/);
     await page.locator('#player-name').fill('SmokePlayer');
-    await page.locator('#memory-gb').fill('6');
+    const memoryToUse = Math.min(6, initial.maxMemoryGb);
+    await page.locator('#memory-gb').fill(String(memoryToUse));
     await page.locator('#save-settings').click();
     const updated = await page.evaluate(() => window.launcher.getState());
     assert.equal(updated.settings.playerName, 'SmokePlayer');
-    assert.equal(updated.settings.memoryGb, 6);
+    assert.equal(updated.settings.memoryGb, memoryToUse);
+    await assert.rejects(() => page.evaluate((maximum) => window.launcher.saveSettings({
+      playerName: 'ChangedName', memoryGb: maximum + 1,
+    }), initial.maxMemoryGb));
+    assert.equal((await page.evaluate(() => window.launcher.getState())).settings.playerName, 'SmokePlayer');
     await page.locator('.rail-button[data-view="home"]').click();
     assert.equal(await page.locator('#capsule-note').textContent(), 'Построить город над озером');
     await page.reload();
     await page.locator('#hero-name').waitFor();
     assert.equal(await page.locator('#hero-name').textContent(), 'Renamed World');
 
-    const output = path.join(__dirname, '..', 'test-output');
-    fs.mkdirSync(output, { recursive: true });
     assert.equal(await page.locator('dialog[open]').count(), 0, 'Открыто модальное окно перед снимком');
     await page.locator('#toast').waitFor({ state: 'hidden' });
     await page.screenshot({ path: path.join(output, 'launcher.png'), fullPage: true });
     await page.locator('.rail-button[data-view="settings"]').click();
+    await page.waitForTimeout(550);
     await page.screenshot({ path: path.join(output, 'settings.png'), fullPage: true });
     await page.locator('.rail-button[data-view="logs"]').click();
     await page.locator('#logs-content').waitFor({ state: 'visible' });

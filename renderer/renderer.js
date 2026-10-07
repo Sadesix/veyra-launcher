@@ -5,6 +5,7 @@
   const el = (id) => document.getElementById(id);
   const state = { data: null, view: 'home', loader: 'vanilla', loaderRequest: 0, editingId: '', editAccent: 'violet', removingId: '', toastTimer: null, busy: false, javaMode: 'auto' };
   const loaderNames = { vanilla: 'Vanilla', fabric: 'Fabric', neoforge: 'NeoForge', forge: 'Forge' };
+  const loaderIcon = (loader) => '../assets/brands/' + ({ vanilla: 'minecraft', fabric: 'fabric', neoforge: 'neoforge', forge: 'forge' }[loader] || 'minecraft') + '.png';
   const icon = (name) => {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.classList.add('icon');
@@ -18,6 +19,7 @@
   const selected = () => instances().find((item) => item.id === state.data?.settings.selectedInstanceId) || instances()[0] || null;
   const setText = (id, value) => { el(id).textContent = String(value); };
   const countText = (n) => n + ' ' + (n % 10 === 1 && n % 100 !== 11 ? 'экземпляр' : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'экземпляра' : 'экземпляров'));
+  const memoryMaximum = () => Math.max(1, Number(state.data?.maxMemoryGb) || 16);
 
   function notice(message) {
     setText('notice-text', message);
@@ -44,7 +46,7 @@
       button.classList.toggle('is-active', button.dataset.view === view);
     }
     setText('view-title', { home: 'Главная', instances: 'Экземпляры', logs: 'Журнал', settings: 'Настройки' }[view]);
-    el('search-input').hidden = view !== 'home' && view !== 'instances';
+    el('search-input').closest('.search-box').hidden = view !== 'home' && view !== 'instances';
     if (view === 'logs') refreshLogs();
     if (view === 'settings') renderSettings();
     if (view === 'instances' || view === 'home') renderCards();
@@ -87,7 +89,13 @@
     top.className = 'instance-card-top';
     const pill = document.createElement('span');
     pill.className = 'pill';
-    pill.textContent = loaderNames[instance.loader] || instance.loader;
+    const loaderImage = document.createElement('img');
+    loaderImage.className = 'brand-icon';
+    loaderImage.src = loaderIcon(instance.loader);
+    loaderImage.alt = '';
+    const loaderText = document.createElement('span');
+    loaderText.textContent = loaderNames[instance.loader] || instance.loader;
+    pill.append(loaderImage, loaderText);
     top.append(pill);
     if (instance.favorite) {
       const favorite = document.createElement('span');
@@ -105,6 +113,7 @@
     content.append(top, name, version, status);
     button.append(art, shade, content);
     button.addEventListener('click', async () => {
+      closeQuickRename();
       await action(() => api.selectInstance(instance.id));
       showView('home');
     });
@@ -126,11 +135,12 @@
     el('hero-empty').hidden = Boolean(item);
     el('hero-active').hidden = !item;
     if (!item) {
+      closeQuickRename();
       el('hero-image').style.backgroundImage = '';
       for (const id of ['detail-loader', 'detail-version', 'detail-folder', 'capsule-last']) setText(id, '—');
       setText('detail-java', 'Автоматически');
       setText('detail-memory', (state.data?.settings.memoryGb || 4) + ' ГБ');
-      setText('capsule-note', 'Создайте экземпляр и оставьте первую заметку к своему миру.');
+      setText('capsule-note', 'Создайте экземпляр и оставьте первую заметку к сборке.');
       setText('capsule-launches', '0');
       return;
     }
@@ -140,10 +150,11 @@
     el('hero-image').style.backgroundImage = item.coverUrl ? 'url("' + item.coverUrl + '")' : '';
     el('hero-favorite').hidden = !item.favorite;
     setText('hero-name', item.name);
-    setText('hero-loader', loaderNames[item.loader] || item.loader);
-    setText('hero-version', 'Minecraft ' + item.minecraftVersion);
+    el('hero-loader').querySelector('img').src = loaderIcon(item.loader);
+    el('hero-loader').querySelector('span').textContent = loaderNames[item.loader] || item.loader;
+    el('hero-version').querySelector('span').textContent = 'Minecraft ' + item.minecraftVersion;
     setText('hero-description', item.installed
-      ? 'Ваш мир готов. Моды, сохранения и настройки останутся внутри этого экземпляра.'
+      ? 'Сборка готова. Моды, сохранения и настройки останутся внутри этого экземпляра.'
       : 'Экземпляр создан. Установите игру, чтобы начать.');
     setText('detail-loader', loaderNames[item.loader] || item.loader);
     setText('detail-version', item.minecraftVersion);
@@ -151,7 +162,7 @@
     setText('detail-memory', (item.memoryGb || state.data.settings.memoryGb) + ' ГБ');
     setText('detail-folder', item.legacy ? 'Старая папка' : 'Своя папка');
     el('detail-folder').title = item.directory;
-    setText('capsule-note', item.note || 'Оставьте здесь мысль, цель или воспоминание об этом мире.');
+    setText('capsule-note', item.note || 'Оставьте здесь цель или напоминание для этой сборки.');
     setText('capsule-launches', item.launchCount || 0);
     setText('capsule-last', item.lastPlayedAt
       ? new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' }).format(new Date(item.lastPlayedAt))
@@ -189,15 +200,20 @@
     if (!state.data) return;
     const settings = state.data.settings;
     el('player-name').value = settings.playerName;
+    const maximum = memoryMaximum();
+    el('memory-gb').max = String(maximum);
+    el('memory-range').max = String(maximum);
     el('memory-gb').value = settings.memoryGb;
-    el('memory-range').value = Math.min(16, settings.memoryGb);
+    el('memory-range').value = settings.memoryGb;
+    setText('memory-limit-hint', 'На компьютере ' + state.data.systemMemoryGb + ' ГБ. Лимит для игры — ' + maximum + ' ГБ; 2 ГБ оставляем системе.');
+    for (const button of document.querySelectorAll('[data-memory]')) button.disabled = Number(button.dataset.memory) > maximum;
     el('show-snapshots').checked = settings.showSnapshots;
     el('java-path').value = settings.javaPath || '';
     state.javaMode = settings.javaPath ? 'manual' : 'auto';
     renderJavaMode();
     renderJavaCandidates();
-    setText('data-path', state.data.dataDirectory);
-    el('data-path').title = state.data.dataDirectory;
+    setText('data-path', state.data.instancesDirectory);
+    el('data-path').title = state.data.instancesDirectory;
   }
   function renderJavaMode() {
     const automatic = state.javaMode === 'auto';
@@ -249,7 +265,7 @@
       return;
     }
     for (const version of versions) {
-      select.add(new Option(version.id + (version.type === 'snapshot' ? ' · снимок' : ''), version.id));
+      select.add(new Option(version.id + (version.type === 'snapshot' ? ' · Snapshot' : ''), version.id));
     }
     select.value = versions.some((item) => item.id === previous) ? previous : versions[0].id;
     el('create-submit').disabled = false;
@@ -302,6 +318,7 @@
     el('edit-note').value = item.note || '';
     el('edit-memory-default').checked = item.memoryGb == null;
     el('edit-memory').value = item.memoryGb || state.data.settings.memoryGb;
+    el('edit-memory').max = String(memoryMaximum());
     el('edit-memory').disabled = item.memoryGb == null;
     el('edit-java-auto').checked = !item.javaPath;
     el('edit-java-path').value = item.javaPath || '';
@@ -327,6 +344,40 @@
       button.classList.toggle('is-selected', button.dataset.accent === state.editAccent);
     }
   }
+  function openQuickRename() {
+    const item = selected();
+    if (!item) return;
+    el('hero-rename-input').value = item.name;
+    el('hero-title-line').hidden = true;
+    el('hero-rename-form').hidden = false;
+    el('hero-rename-input').focus();
+    el('hero-rename-input').select();
+  }
+  function closeQuickRename() {
+    el('hero-rename-form').hidden = true;
+    el('hero-title-line').hidden = false;
+  }
+  function hideLaunchStage() {
+    const stage = el('launch-stage');
+    if (stage.hidden) return;
+    stage.classList.add('is-exiting');
+    setTimeout(() => { stage.hidden = true; stage.classList.remove('is-exiting'); }, 300);
+  }
+  async function launchWithScene(item) {
+    const stage = el('launch-stage');
+    stage.classList.remove('is-exiting');
+    el('launch-stage-image').style.backgroundImage = item.coverUrl ? 'url("' + item.coverUrl + '")' : '';
+    setText('launch-stage-name', item.name);
+    setText('launch-stage-message', 'Проверяем Java и файлы игры…');
+    stage.hidden = false;
+    const started = Date.now();
+    const result = await action(() => api.launchInstance(item.id));
+    if (result) {
+      setText('launch-stage-message', 'Minecraft запущен. Хорошей игры.');
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, 950 - (Date.now() - started))));
+    }
+    hideLaunchStage();
+  }
   async function refreshLogs() {
     const content = await action(() => api.getLogs());
     if (content != null) setText('logs-content', content || 'Журнал пока пуст.');
@@ -337,6 +388,9 @@
     if (event.type === 'progress') {
       if (state.data?.operation) state.data.operation.progress = event;
       renderHero();
+      if (!el('launch-stage').hidden && state.data?.operation?.type === 'launch') {
+        setText('launch-stage-message', event.message || 'Запускаем Minecraft…');
+      }
     }
     if (event.type === 'status') {
       setText('footer-message', event.message || 'Готово');
@@ -360,6 +414,11 @@
         event.preventDefault();
         showView('instances');
         el('search-input').focus();
+      } else if (event.key === 'F2' && selected() && !document.querySelector('dialog[open]') &&
+        !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
+        event.preventDefault();
+        showView('home');
+        openQuickRename();
       }
     });
     el('notice-close').addEventListener('click', () => { el('notice').hidden = true; });
@@ -368,10 +427,39 @@
     el('window-close').addEventListener('click', () => action(() => api.closeWindow()));
     el('main-action').addEventListener('click', () => {
       const item = selected();
-      if (item) action(() => item.installed ? api.launchInstance(item.id) : api.installInstance(item.id));
+      if (item) {
+        if (item.installed) launchWithScene(item);
+        else action(() => api.installInstance(item.id));
+      }
     });
+    el('launch-stage-dismiss').addEventListener('click', hideLaunchStage);
     el('hero-folder').addEventListener('click', () => { const item = selected(); if (item) action(() => api.openInstanceFolder(item.id)); });
     el('hero-edit').addEventListener('click', () => openEdit(selected()));
+    el('hero-rename').addEventListener('click', openQuickRename);
+    el('hero-rename-cancel').addEventListener('click', closeQuickRename);
+    el('hero-rename-input').addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); closeQuickRename(); }
+    });
+    el('hero-rename-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const item = selected();
+      if (!item) return closeQuickRename();
+      const updated = await action(() => api.updateInstance(item.id, { name: el('hero-rename-input').value.trim() }));
+      if (updated) { closeQuickRename(); toast('Название изменено'); }
+    });
+    const hero = el('hero-card');
+    hero.addEventListener('pointermove', (event) => {
+      if (event.pointerType !== 'mouse' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      const box = hero.getBoundingClientRect();
+      const x = ((event.clientX - box.left) / box.width - .5) * 18;
+      const y = ((event.clientY - box.top) / box.height - .5) * 14;
+      hero.style.setProperty('--scene-x', x.toFixed(1) + 'px');
+      hero.style.setProperty('--scene-y', y.toFixed(1) + 'px');
+    });
+    hero.addEventListener('pointerleave', () => {
+      hero.style.setProperty('--scene-x', '0px');
+      hero.style.setProperty('--scene-y', '0px');
+    });
     el('cancel-operation').addEventListener('click', async () => {
       await action(() => api.cancelOperation());
       el('cancel-operation').disabled = true;
@@ -465,7 +553,12 @@
       const path = await action(() => api.pickJava());
       if (path) el('java-path').value = path;
     });
-    el('memory-gb').addEventListener('input', () => { el('memory-range').value = Math.min(16, Number(el('memory-gb').value)); });
+    el('memory-gb').addEventListener('input', () => {
+      el('memory-range').value = Math.min(memoryMaximum(), Math.max(1, Number(el('memory-gb').value) || 1));
+    });
+    el('memory-gb').addEventListener('change', () => {
+      el('memory-gb').value = Math.min(memoryMaximum(), Math.max(1, Number(el('memory-gb').value) || 1));
+    });
     el('memory-range').addEventListener('input', () => { el('memory-gb').value = el('memory-range').value; });
     for (const button of document.querySelectorAll('[data-memory]')) {
       button.addEventListener('click', () => { el('memory-gb').value = button.dataset.memory; el('memory-range').value = button.dataset.memory; });
