@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('launcher', Object.freeze({
   removeInstance: (id) => invoke('remove-instance', id),
   installInstance: (id) => invoke('install-instance', id),
   launchInstance: (id) => invoke('launch-instance', id),
+  stopGame: () => invoke('stop-game'),
   cancelOperation: () => invoke('cancel-operation'),
   saveSettings: (patch) => invoke('save-settings', patch),
   startMicrosoftLogin: () => invoke('start-microsoft-login'),

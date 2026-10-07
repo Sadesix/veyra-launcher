@@ -289,6 +289,10 @@ input[type="range"] { width: 100%; accent-color: #a777f7; }
 .footer-status { display: flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .footer-status i { width: 6px; height: 6px; flex: none; border-radius: 50%; background: #9bc79d; }
 .footer-right { margin-left: auto; white-space: nowrap; }
+.stop-game-footer { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 26px; padding: 0 9px; border: 1px solid rgba(235,124,154,.28); border-radius: 7px; background: rgba(203,77,114,.1); color: #f6b8cb; font-size: 10px; font-weight: 600; transition: background .25s, border-color .25s; }
+.stop-game-footer:hover:not(:disabled) { background: rgba(203,77,114,.2); border-color: rgba(235,124,154,.55); }
+.stop-game-footer:disabled { opacity: .6; }
+.stop-game-footer .icon { width: 13px; height: 13px; }
 .notice { display: flex; align-items: center; gap: 11px; min-height: 43px; padding: 8px 36px; background: rgba(154, 83, 97, .16); border-bottom: 1px solid rgba(216, 104, 121, .27); color: #ffd4dc; font-size: 11px; }
 .notice > .icon { width: 16px; height: 16px; }
 .notice span { flex: 1; }

@@ -245,6 +245,7 @@ function publicState() {
       progress: lastProgress,
     } : null,
     runningInstanceId: gameProcess?.instanceId || null,
+    stoppingGame: Boolean(gameProcess?.stopping),
     appVersion: app.getVersion(),
     systemMemoryGb: systemMemoryGb(),
     maxMemoryGb: maxMemoryGb(),
@@ -775,7 +776,8 @@ async function launchInstance(id) {
       launcherName: 'Veyra Launcher',
       extraExecOption: { windowsHide: true },
     });
-    gameProcess = { child, instanceId: id };
+    const run = { child, instanceId: id, stopping: false, stoppedByUser: false };
+    gameProcess = run;
     lastCrash = null;
     let recentOutput = '';
     const launchedAt = Date.now();
@@ -799,7 +801,8 @@ async function launchInstance(id) {
     child.once('close', async (code, signal) => {
       if (gameProcess?.child === child) gameProcess = null;
       emitState();
-      if (code === 0) status('Minecraft закрыт');
+      if (run.stoppedByUser) status('Игра остановлена');
+      else if (code === 0) status('Minecraft закрыт');
       else {
         const message = diagnoseFailure(recentOutput, code, signal);
         const reportRoot = path.join(instance.directory, 'crash-reports');
@@ -824,6 +827,25 @@ async function launchInstance(id) {
     reportError('Не удалось запустить игру', error);
     throw error;
   } finally { endOperation(operation); }
+}
+
+async function stopGame() {
+  const run = gameProcess;
+  if (!run) return false;
+  if (run.stopping) return true;
+  run.stopping = true;
+  run.stoppedByUser = true;
+  emitState();
+  try {
+    if (!run.child.kill() && run.child.exitCode == null) throw new Error('Не удалось завершить процесс Minecraft');
+    status('Останавливаем Minecraft…');
+    return true;
+  } catch (error) {
+    run.stopping = false;
+    run.stoppedByUser = false;
+    emitState();
+    throw error;
+  }
 }
 
 async function getLogs() {
@@ -890,6 +912,7 @@ function registerIpc() {
   ipcMain.handle('launcher:remove-instance', (_event, id) => removeInstance(id));
   ipcMain.handle('launcher:install-instance', (_event, id) => installInstance(id));
   ipcMain.handle('launcher:launch-instance', (_event, id) => launchInstance(id));
+  ipcMain.handle('launcher:stop-game', () => stopGame());
   ipcMain.handle('launcher:cancel-operation', async () => {
     if (!activeOperation || activeOperation.type !== 'install') return false;
     activeOperation.controller.abort();

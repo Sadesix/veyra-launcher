@@ -182,11 +182,14 @@
       : '—');
     const operation = state.data.operation;
     const running = state.data.runningInstanceId === item.id;
+    const stopping = running && state.data.stoppingGame;
     const working = operation?.instanceId === item.id;
     setText('main-action-label', working ? (operation.type === 'launch' ? 'Запускаем…' : 'Устанавливаем…') :
-      (running ? 'Игра запущена' : (item.installed ? 'Играть' : 'Установить')));
-    el('main-action-icon').querySelector('use').setAttribute('href', '#i-' + (item.installed ? 'play' : 'download'));
-    el('main-action').disabled = Boolean(operation || state.data.runningInstanceId);
+      (stopping ? 'Останавливаем…' : (running ? 'Остановить игру' : (item.installed ? 'Играть' : 'Установить'))));
+    el('main-action-icon').querySelector('use').setAttribute('href', '#i-' + (running ? 'stop' : (item.installed ? 'play' : 'download')));
+    el('main-action').classList.toggle('button-danger', running);
+    el('main-action').classList.toggle('button-primary', !running);
+    el('main-action').disabled = Boolean(operation || stopping || (state.data.runningInstanceId && !running));
     el('hero-edit').disabled = working;
     const box = el('progress-box');
     box.hidden = !working;
@@ -260,6 +263,11 @@
   function render() {
     if (!state.data) return;
     renderProfile();
+    const running = instances().find((item) => item.id === state.data.runningInstanceId);
+    el('stop-game-footer').hidden = !running;
+    el('stop-game-footer').disabled = Boolean(state.data.stoppingGame);
+    el('stop-game-footer').title = running ? 'Завершить процесс: ' + running.name : '';
+    setText('stop-game-footer-label', state.data.stoppingGame ? 'Останавливаем…' : 'Остановить игру');
     renderHero();
     renderCards();
     setText('app-version', state.data.appVersion);
@@ -570,10 +578,12 @@
     el('main-action').addEventListener('click', () => {
       const item = selected();
       if (item) {
-        if (item.installed) launchWithScene(item);
+        if (state.data.runningInstanceId === item.id) action(() => api.stopGame());
+        else if (item.installed) launchWithScene(item);
         else action(() => api.installInstance(item.id));
       }
     });
+    el('stop-game-footer').addEventListener('click', () => action(() => api.stopGame()));
     el('launch-stage-dismiss').addEventListener('click', hideLaunchStage);
     el('hero-folder').addEventListener('click', () => { const item = selected(); if (item) action(() => api.openInstanceFolder(item.id)); });
     el('hero-edit').addEventListener('click', () => openEdit(selected()));
