@@ -3,7 +3,9 @@
 
   const api = window.launcher;
   const el = (id) => document.getElementById(id);
-  const state = { data: null, view: 'home', loader: 'vanilla', loaderRequest: 0, editingId: '', editAccent: 'violet', removingId: '', toastTimer: null, busy: false, javaMode: 'auto' };
+  const state = { data: null, view: 'home', loader: 'vanilla', loaderRequest: 0, editingId: '', editAccent: 'violet', removingId: '', toastTimer: null, busy: false, javaMode: 'auto', profileTab: 'local' };
+  // Microsoft integration is retained while its public interface is paused.
+  const MICROSOFT_UI_ENABLED = false;
   const loaderNames = { vanilla: 'Vanilla', fabric: 'Fabric', neoforge: 'NeoForge', forge: 'Forge' };
   const loaderIcon = (loader) => '../assets/brands/' + ({ vanilla: 'minecraft', fabric: 'fabric', neoforge: 'neoforge', forge: 'forge' }[loader] || 'minecraft') + '.png';
   const icon = (name) => {
@@ -21,9 +23,10 @@
   const countText = (n) => n + ' ' + (n % 10 === 1 && n % 100 !== 11 ? 'экземпляр' : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'экземпляра' : 'экземпляров'));
   const memoryMaximum = () => Math.max(1, Number(state.data?.maxMemoryGb) || 16);
 
-  function notice(message) {
+  function notice(message, crash = false) {
     setText('notice-text', message);
     el('notice').hidden = false;
+    el('notice-report').hidden = !crash;
   }
   function toast(message) {
     setText('toast-text', message);
@@ -45,6 +48,9 @@
     for (const button of document.querySelectorAll('.rail-button')) {
       button.classList.toggle('is-active', button.dataset.view === view);
     }
+    const navButtons = [...document.querySelectorAll('.rail-nav .rail-button')];
+    const currentButton = navButtons.find((button) => button.dataset.view === view);
+    el('rail-nav').style.setProperty('--nav-y', (currentButton?.offsetTop || 0) + 'px');
     setText('view-title', { home: 'Главная', instances: 'Экземпляры', logs: 'Журнал', settings: 'Настройки' }[view]);
     el('search-input').closest('.search-box').hidden = view !== 'home' && view !== 'instances';
     if (view === 'logs') refreshLogs();
@@ -121,10 +127,17 @@
   }
   function renderCards() {
     const items = filteredInstances();
+    const key = JSON.stringify([items, state.data.settings.selectedInstanceId]);
+    if (state.cardsKey === key) return;
+    state.cardsKey = key;
     for (const [id, limit] of [['home-instance-grid', 4], ['all-instance-grid', Infinity]]) {
       const grid = el(id);
       grid.replaceChildren();
-      for (const instance of items.slice(0, limit)) grid.append(instanceCard(instance));
+      for (const [index, instance] of items.slice(0, limit).entries()) {
+        const card = instanceCard(instance);
+        card.style.setProperty('--order', Math.min(index, 7));
+        grid.append(card);
+      }
       grid.append(addCard());
     }
     setText('home-count', countText(instances().length));
@@ -200,6 +213,7 @@
     if (!state.data) return;
     const settings = state.data.settings;
     el('player-name').value = settings.playerName;
+    setText('settings-account-status', (MICROSOFT_UI_ENABLED && state.data.account.mode === 'microsoft' ? 'Microsoft · ' : '') + state.data.account.name);
     const maximum = memoryMaximum();
     el('memory-gb').max = String(maximum);
     el('memory-range').max = String(maximum);
@@ -245,9 +259,64 @@
   }
   function render() {
     if (!state.data) return;
+    renderProfile();
     renderHero();
     renderCards();
     setText('app-version', state.data.appVersion);
+  }
+  function renderProfile() {
+    const account = state.data.account;
+    const auth = account.auth;
+    setText('profile-chip-name', account.name);
+    setText('profile-chip-mode', account.mode === 'microsoft' ? (MICROSOFT_UI_ENABLED ? 'Microsoft' : 'Игровой профиль') : 'Локальный профиль');
+    setText('rail-profile-initial', account.name.slice(0, 1).toUpperCase());
+    setText('profile-avatar', account.name.slice(0, 1).toUpperCase());
+    setText('profile-active-name', account.name);
+    setText('profile-active-mode', account.mode === 'microsoft' ? (MICROSOFT_UI_ENABLED ? 'Microsoft · Minecraft Java' : 'Игровой профиль') : 'Локальный профиль');
+    el('profile-rail').title = 'Профиль: ' + account.name;
+    for (const button of document.querySelectorAll('[data-account-mode]')) {
+      button.classList.toggle('is-selected', button.dataset.accountMode === state.profileTab);
+    }
+    el('account-tabs').hidden = !MICROSOFT_UI_ENABLED;
+    el('profile-local-panel').hidden = MICROSOFT_UI_ENABLED && state.profileTab !== 'local';
+    el('profile-microsoft-panel').hidden = !MICROSOFT_UI_ENABLED || state.profileTab !== 'microsoft';
+    el('microsoft-signed').hidden = !account.microsoft;
+    el('microsoft-intro').hidden = Boolean(account.microsoft);
+    setText('microsoft-name', account.microsoft?.name || '');
+    setText('microsoft-uuid', account.microsoft?.id || '');
+    el('device-login').hidden = !auth.busy;
+    setText('microsoft-code', auth.userCode || '…');
+    setText('microsoft-phase', auth.phase || '');
+    el('microsoft-copy').disabled = !auth.userCode;
+    el('microsoft-browser').disabled = !auth.verificationUri;
+    el('microsoft-error').hidden = !auth.error;
+    setText('microsoft-error', auth.error || '');
+    el('microsoft-login-actions').hidden = auth.busy;
+    el('microsoft-start').disabled = !account.configured || auth.busy;
+    setText('microsoft-start-label', account.microsoft ? 'Сменить аккаунт' : 'Войти в Microsoft');
+    el('microsoft-logout').hidden = !account.microsoft;
+    el('microsoft-not-configured').hidden = account.configured;
+    if (document.activeElement !== el('microsoft-client-id')) el('microsoft-client-id').value = account.clientId;
+  }
+  function openProfile() {
+    state.profileTab = MICROSOFT_UI_ENABLED ? state.data.account.mode : 'local';
+    el('profile-name-input').value = state.data.settings.playerName;
+    el('profile-feedback').hidden = true;
+    renderProfile();
+    el('profile-dialog').showModal();
+    if (state.profileTab === 'local') {
+      el('profile-name-input').focus();
+      el('profile-name-input').select();
+    }
+  }
+  async function profileAction(callback) {
+    el('profile-feedback').hidden = true;
+    try { return await callback(); }
+    catch (error) {
+      setText('profile-feedback', friendlyError(error));
+      el('profile-feedback').hidden = false;
+      return null;
+    }
   }
   function availableVersions() {
     const versions = state.data?.versions || [];
@@ -398,9 +467,24 @@
       if (event.level === 'success') toast(event.message);
     }
     if (event.type === 'error') notice(event.message || 'Неизвестная ошибка');
+    if (event.type === 'game-crash') notice(event.message, true);
     if (event.type === 'log' && state.view === 'logs') refreshLogs();
   }
   function bind() {
+    for (const icon of document.querySelectorAll('svg.icon')) {
+      const name = icon.querySelector('use')?.getAttribute('href')?.replace('#i-', '');
+      if (name) icon.dataset.motion = name;
+    }
+    document.addEventListener('click', (event) => {
+      const button = event.target.closest('button');
+      const icon = button?.querySelector('svg.icon');
+      if (!icon || button.disabled || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      if (icon.dataset.motion === 'settings' || icon.dataset.motion === 'refresh') {
+        icon.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(180deg)' }], { duration: 600, easing: 'cubic-bezier(.16,1,.3,1)' });
+      } else {
+        icon.animate([{ scale: 1 }, { scale: .75, offset: .2 }, { scale: 1.2, offset: .55 }, { scale: 1 }], { duration: 460, easing: 'cubic-bezier(.2,.8,.2,1)' });
+      }
+    });
     for (const button of document.querySelectorAll('[data-view]')) {
       button.addEventListener('click', () => showView(button.dataset.view));
     }
@@ -422,6 +506,64 @@
       }
     });
     el('notice-close').addEventListener('click', () => { el('notice').hidden = true; });
+    el('notice-report').addEventListener('click', () => action(() => api.openCrashReport()));
+    for (const id of ['profile-rail', 'profile-top', 'settings-profile']) el(id).addEventListener('click', openProfile);
+    for (const button of document.querySelectorAll('[data-account-mode]')) {
+      button.addEventListener('click', async () => {
+        state.profileTab = button.dataset.accountMode;
+        renderProfile();
+        if (state.profileTab === 'local') {
+          await profileAction(() => api.cancelMicrosoftLogin());
+          await profileAction(() => api.selectAccount('local'));
+          el('profile-name-input').value = state.data.settings.playerName;
+          el('profile-name-input').focus();
+          el('profile-name-input').select();
+        } else if (state.data.account.microsoft) await profileAction(() => api.selectAccount('microsoft'));
+        else if (!state.data.account.configured) el('microsoft-setup').open = true;
+      });
+    }
+    el('profile-name-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const saved = await profileAction(() => api.saveSettings({ playerName: el('profile-name-input').value.trim() }));
+      if (saved) {
+        await profileAction(() => api.selectAccount('local'));
+        el('player-name').value = state.data.settings.playerName;
+        el('profile-dialog').close();
+        toast('Ник сохранён: ' + state.data.settings.playerName);
+      }
+    });
+    el('profile-dialog').addEventListener('close', () => {
+      if (state.data?.account.auth.busy) api.cancelMicrosoftLogin().catch(() => {});
+    });
+    el('microsoft-start').addEventListener('click', async () => {
+      const started = await profileAction(() => api.startMicrosoftLogin());
+      if (started) await profileAction(() => api.openAccountLink('login'));
+    });
+    el('microsoft-browser').addEventListener('click', () => profileAction(() => api.openAccountLink('login')));
+    el('microsoft-copy').addEventListener('click', async () => {
+      await profileAction(() => api.copyLoginCode());
+      toast('Код скопирован');
+    });
+    el('microsoft-cancel').addEventListener('click', () => profileAction(() => api.cancelMicrosoftLogin()));
+    el('microsoft-logout').addEventListener('click', () => profileAction(() => api.logoutMicrosoft()));
+    el('microsoft-refresh').addEventListener('click', async () => {
+      el('microsoft-refresh').disabled = true;
+      try {
+        const refreshed = await profileAction(() => api.refreshAccount());
+        if (refreshed) toast('Профиль Minecraft обновлён');
+      } finally { el('microsoft-refresh').disabled = false; }
+    });
+    el('microsoft-name-change').addEventListener('click', () => profileAction(() => api.openAccountLink('profile')));
+    el('microsoft-setup-help').addEventListener('click', () => profileAction(() => api.openAccountLink('setup')));
+    el('microsoft-config-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const saved = await profileAction(() => api.saveMicrosoftClientId(el('microsoft-client-id').value.trim()));
+      if (saved) {
+        renderProfile();
+        el('microsoft-setup').open = !state.data.account.configured;
+        toast('Настройка Microsoft сохранена');
+      }
+    });
     el('window-minimize').addEventListener('click', () => action(() => api.minimizeWindow()));
     el('window-maximize').addEventListener('click', () => action(() => api.maximizeWindow()));
     el('window-close').addEventListener('click', () => action(() => api.closeWindow()));

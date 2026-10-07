@@ -13,7 +13,7 @@
     <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 21v-7h6v7"/></symbol>
     <symbol id="i-box" viewBox="0 0 24 24"><path d="m12 2 9 5v10l-9 5-9-5V7z"/><path d="m3 7 9 5 9-5M12 12v10"/></symbol>
     <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="2.5" y="3.5" width="19" height="17" rx="3"/><path d="m7 9 3 3-3 3M12.5 15.5H17"/></symbol>
-    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.6 5.6 7 7m10 10 1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"/><circle cx="12" cy="12" r="4"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="m9.5 3-.6 2.2-1.8 1-2.2-.6-2.5 4.3L4 11.5v2l-1.6 1.6 2.5 4.3 2.2-.6 1.8 1 .6 2.2h5l.6-2.2 1.8-1 2.2.6 2.5-4.3-1.6-1.6v-2l1.6-1.6-2.5-4.3-2.2.6-1.8-1-.6-2.2z" transform="translate(0 -.5)"/><circle cx="12" cy="12" r="3.2"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></symbol>
     <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 4 12 8-12 8z"/></symbol>
@@ -31,6 +31,8 @@
     <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 9h6v6H9zM9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4"/></symbol>
     <symbol id="i-coffee" viewBox="0 0 24 24"><path d="M5 8h12v7a6 6 0 0 1-12 0zM17 9h2a3 3 0 0 1 0 6h-2M4 21h15M9 3v2m4-2v2"/></symbol>
     <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h4"/></symbol>
+    <symbol id="i-microsoft" viewBox="0 0 24 24"><path fill="#f35325" stroke="none" d="M2 2h9v9H2z"/><path fill="#81bc06" stroke="none" d="M13 2h9v9h-9z"/><path fill="#05a6f0" stroke="none" d="M2 13h9v9H2z"/><path fill="#ffba08" stroke="none" d="M13 13h9v9h-9z"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 7.5h.01"/></symbol>
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
     <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 2 2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2z"/></symbol>
@@ -42,7 +44,7 @@
   <div class="app-shell">
     <aside class="icon-rail" aria-label="Навигация">
       <div class="rail-logo" title="Veyra Launcher"><img src="../assets/veyra-logo-64.png" alt="" /></div>
-      <nav class="rail-nav" aria-label="Разделы">
+      <nav class="rail-nav" id="rail-nav" aria-label="Разделы">
         <button class="rail-button is-active" type="button" data-view="home" aria-label="Главная" title="Главная"><svg class="icon"><use href="#i-home"/></svg></button>
         <button class="rail-button" type="button" data-view="instances" aria-label="Экземпляры" title="Экземпляры"><svg class="icon"><use href="#i-box"/></svg></button>
         <button class="rail-button" type="button" data-view="logs" aria-label="Журнал" title="Журнал"><svg class="icon"><use href="#i-terminal"/></svg></button>
@@ -50,7 +52,7 @@
       </nav>
       <div class="rail-bottom">
         <div class="rail-separator"></div>
-        <div class="rail-profile" title="Локальный профиль"><svg class="icon"><use href="#i-user"/></svg></div>
+        <button class="rail-profile" id="profile-rail" type="button" title="Профиль и никнейм" aria-label="Профиль и никнейм"><span id="rail-profile-initial">P</span></button>
       </div>
     </aside>
 
@@ -58,6 +60,7 @@
       <header class="topbar">
         <div class="topbar-title"><span class="wordmark">veyra</span><strong id="view-title">Главная</strong></div>
         <label class="search-box"><svg class="icon"><use href="#i-search"/></svg><input id="search-input" type="search" placeholder="Найти экземпляр" aria-label="Найти экземпляр" /><kbd>Ctrl K</kbd></label>
+        <button class="profile-chip" id="profile-top" type="button" title="Профиль и никнейм"><svg class="icon"><use href="#i-user"/></svg><span><strong id="profile-chip-name">Player</strong><small id="profile-chip-mode">Локальный профиль</small></span></button>
         <button class="button button-primary top-create" type="button" id="create-top"><svg class="icon"><use href="#i-plus"/></svg><span>Новый экземпляр</span></button>
         <div class="window-controls">
           <button type="button" id="window-minimize" aria-label="Свернуть"><svg class="icon"><use href="#i-minimize"/></svg></button>
@@ -66,7 +69,7 @@
         </div>
       </header>
 
-      <div class="notice" id="notice" role="alert" hidden><svg class="icon"><use href="#i-info"/></svg><span id="notice-text"></span><button type="button" id="notice-close" aria-label="Скрыть"><svg class="icon"><use href="#i-close"/></svg></button></div>
+      <div class="notice" id="notice" role="alert" hidden><svg class="icon"><use href="#i-info"/></svg><span id="notice-text"></span><button type="button" class="notice-report" id="notice-report" hidden>Открыть отчёт</button><button type="button" id="notice-close" aria-label="Скрыть"><svg class="icon"><use href="#i-close"/></svg></button></div>
 
       <main class="content">
         <section class="page is-visible" id="home-page" data-page="home">
@@ -90,7 +93,7 @@
                 <div class="hero-actions">
                   <button class="button button-primary hero-main-button" type="button" id="main-action"><svg class="icon" id="main-action-icon"><use href="#i-download"/></svg><span id="main-action-label">Установить</span></button>
                   <button class="button-icon hero-utility" type="button" id="hero-folder" title="Открыть папку" aria-label="Открыть папку"><svg class="icon"><use href="#i-folder"/></svg></button>
-                  <button class="button-icon hero-utility" type="button" id="hero-edit" title="Настройки экземпляра" aria-label="Настройки экземпляра"><svg class="icon"><use href="#i-sliders"/></svg></button>
+                  <button class="button-icon hero-utility" type="button" id="hero-edit" title="Настройки экземпляра" aria-label="Настройки экземпляра"><svg class="icon"><use href="#i-settings"/></svg></button>
                 </div>
                 <div class="progress-box" id="progress-box" hidden><div class="progress-head"><strong id="progress-phase">Подготовка</strong><span id="progress-percent"></span></div><div class="progress-track" id="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span id="progress-fill"></span></div><div class="progress-foot"><span id="progress-message"></span><button type="button" id="cancel-operation">Отменить</button></div></div>
               </div>
@@ -119,10 +122,10 @@
         <section class="page" id="settings-page" data-page="settings" hidden>
           <div class="page-heading"><div><span class="eyebrow">ПОД СЕБЯ</span><h1>Настройки<span>.</span></h1><p>Общие параметры. Для отдельного экземпляра можно задать свои Java и память.</p></div></div>
           <div class="settings-grid">
-            <section class="glass-card settings-card"><div class="section-title"><span class="section-icon"><svg class="icon"><use href="#i-user"/></svg></span><div><h3>Игрок</h3><p>Имя локального профиля</p></div></div><label class="form-field"><span>Никнейм</span><input id="player-name" type="text" maxlength="16" spellcheck="false" autocomplete="off" placeholder="Player" /><small>3–16 латинских букв, цифр или _. Для сетевой игры нужен Microsoft-вход.</small></label></section>
+            <section class="glass-card settings-card"><div class="section-title"><span class="section-icon"><svg class="icon"><use href="#i-user"/></svg></span><div><h3>Игрок</h3><p id="settings-account-status">Локальный профиль</p></div></div><label class="form-field"><span>Локальный никнейм</span><input id="player-name" type="text" maxlength="16" spellcheck="false" autocomplete="off" placeholder="Player" /><small>3–16 латинских букв, цифр или _. Microsoft-профиль использует ваш ник Minecraft.</small></label><button class="button button-secondary" type="button" id="settings-profile"><svg class="icon"><use href="#i-user"/></svg>Профили и Microsoft</button></section>
             <section class="glass-card settings-card"><div class="section-title"><span class="section-icon"><svg class="icon"><use href="#i-cpu"/></svg></span><div><h3>Память</h3><p>Значение по умолчанию для новых экземпляров</p></div></div><div class="memory-line"><input id="memory-range" type="range" min="1" max="16" step="1" /><label class="memory-number"><input id="memory-gb" type="number" min="1" max="16" step="1" /><span>ГБ</span></label></div><div class="memory-presets"><button type="button" data-memory="4">4 ГБ</button><button type="button" data-memory="6">6 ГБ</button><button type="button" data-memory="8">8 ГБ</button></div><small id="memory-limit-hint">Определяем доступную память…</small></section>
             <section class="glass-card settings-card java-card"><div class="section-title"><span class="section-icon"><svg class="icon"><use href="#i-coffee"/></svg></span><div><h3>Java без хлопот</h3><p>Veyra подберёт нужную версию для каждого экземпляра</p></div></div><div class="segmented"><button type="button" id="java-auto" class="is-active">Автоматически</button><button type="button" id="java-manual">Указать путь</button></div><p class="field-explain" id="java-explain">При необходимости лаунчер скачает официальную Java для выбранной версии Minecraft.</p><div class="manual-java" id="manual-java" hidden><input id="java-path" type="text" readonly placeholder="Путь к java.exe или javaw.exe" /><button class="button button-secondary" type="button" id="pick-java">Обзор</button></div><div class="java-detected"><strong>Найдено на компьютере</strong><div id="java-candidates"><span class="muted">Ищем Java…</span></div></div></section>
-            <section class="glass-card settings-card"><div class="section-title"><span class="section-icon"><svg class="icon"><use href="#i-sliders"/></svg></span><div><h3>Дополнительно</h3><p>Версии и папки</p></div></div><label class="toggle-row"><span><strong>Показывать Snapshots</strong><small>Экспериментальные версии Minecraft</small></span><input id="show-snapshots" type="checkbox" role="switch" /><i></i></label><button class="folder-link" type="button" id="settings-open-data"><svg class="icon"><use href="#i-folder"/></svg><span id="data-path">Папка экземпляров</span><svg class="icon"><use href="#i-arrow"/></svg></button></section>
+            <section class="glass-card settings-card"><div class="section-title"><span class="section-icon"><svg class="icon"><use href="#i-settings"/></svg></span><div><h3>Дополнительно</h3><p>Версии и папки</p></div></div><label class="toggle-row"><span><strong>Показывать Snapshots</strong><small>Экспериментальные версии Minecraft</small></span><input id="show-snapshots" type="checkbox" role="switch" /><i></i></label><button class="folder-link" type="button" id="settings-open-data"><svg class="icon"><use href="#i-folder"/></svg><span id="data-path">Папка экземпляров</span><svg class="icon"><use href="#i-arrow"/></svg></button></section>
           </div>
           <div class="settings-actions"><button class="button button-primary" type="button" id="save-settings"><svg class="icon"><use href="#i-check"/></svg>Сохранить настройки</button></div>
         </section>
@@ -131,6 +134,26 @@
       <footer class="footerbar"><span class="footer-brand">veyra <b id="app-version">0.2.1</b></span><span class="footer-status"><i></i><span id="footer-message">Готовим лаунчер…</span></span><span class="footer-right" id="footer-instance-count">0 экземпляров</span></footer>
     </div>
   </div>
+
+  <dialog id="profile-dialog" class="modal profile-modal">
+    <div class="modal-head"><span class="eyebrow">ВАШ ПРОФИЛЬ</span><button type="button" class="modal-close" data-close="profile-dialog" aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <div class="profile-heading"><div class="profile-avatar" id="profile-avatar">P</div><div><h2 id="profile-active-name">Player</h2><p id="profile-active-mode">Локальный профиль</p></div></div>
+    <p class="profile-error" id="profile-feedback" role="alert" hidden></p>
+    <div class="account-tabs" id="account-tabs" hidden><button class="is-selected" type="button" data-account-mode="local"><svg class="icon"><use href="#i-user"/></svg>Локальный</button><button type="button" data-account-mode="microsoft"><svg class="icon"><use href="#i-microsoft"/></svg>Microsoft</button></div>
+    <div id="profile-local-panel">
+      <form id="profile-name-form"><label class="form-field"><span>Ваш ник в игре</span><div class="nickname-row"><input id="profile-name-input" type="text" minlength="3" maxlength="16" pattern="[A-Za-z0-9_]{3,16}" autocomplete="off" spellcheck="false" required aria-label="Локальный никнейм" /><button class="button button-primary" type="submit"><svg class="icon"><use href="#i-check"/></svg>Сохранить</button></div><small>Латинские буквы, цифры и _. Enter сохраняет ник для следующего запуска.</small></label></form>
+      <p class="profile-hint">Локальный профиль подходит для одиночной игры. При смене ника Minecraft создаёт другой локальный UUID.</p>
+    </div>
+    <div id="profile-microsoft-panel" hidden>
+      <div class="microsoft-account" id="microsoft-signed" hidden><span class="account-badge"><svg class="icon"><use href="#i-check"/></svg>Minecraft Java</span><strong id="microsoft-name"></strong><small id="microsoft-uuid"></small><div class="profile-actions"><button class="button button-secondary" type="button" id="microsoft-name-change"><svg class="icon"><use href="#i-edit"/></svg>Сменить ник на сайте</button><button class="button button-secondary" type="button" id="microsoft-refresh"><svg class="icon"><use href="#i-refresh"/></svg>Обновить</button></div><p class="profile-hint">Ник связан с Minecraft-профилем. После изменения на minecraft.net нажмите «Обновить».</p></div>
+      <p class="profile-hint" id="microsoft-intro">Войдите с аккаунтом, которому доступна Minecraft Java Edition. Подтверждение откроется в вашем браузере.</p>
+      <div class="device-login" id="device-login" hidden><span class="eyebrow">КОД ПОДТВЕРЖДЕНИЯ</span><div class="device-code-row"><strong id="microsoft-code"></strong><button class="button-icon" type="button" id="microsoft-copy" aria-label="Скопировать код" title="Скопировать код"><svg class="icon"><use href="#i-copy"/></svg></button></div><p id="microsoft-phase" role="status"></p><div class="profile-actions"><button class="button button-primary" type="button" id="microsoft-browser"><svg class="icon"><use href="#i-arrow"/></svg>Открыть Microsoft</button><button class="button button-secondary" type="button" id="microsoft-cancel">Отменить</button></div></div>
+      <p class="profile-error" id="microsoft-error" role="alert" hidden></p>
+      <div class="profile-actions" id="microsoft-login-actions"><button class="button button-primary" type="button" id="microsoft-start"><svg class="icon"><use href="#i-microsoft"/></svg><span id="microsoft-start-label">Войти в Microsoft</span></button><button class="button button-danger" type="button" id="microsoft-logout" hidden>Выйти</button></div>
+      <p class="profile-hint" id="microsoft-not-configured" hidden>Microsoft-вход в этой сборке Veyra ещё не подключён. Создателю лаунчера нужно указать Client ID своего приложения ниже.</p>
+      <details class="microsoft-setup" id="microsoft-setup"><summary>Настройка Microsoft-входа для Veyra</summary><p class="profile-hint">Публичный ID зарегистрированного приложения с доступом к Minecraft API. Это настройка создателя лаунчера.</p><form id="microsoft-config-form"><label class="form-field"><span>Application (Client) ID</span><input id="microsoft-client-id" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" spellcheck="false" /></label><div class="profile-actions"><button class="button button-secondary" type="submit">Сохранить ID</button><button class="text-button" type="button" id="microsoft-setup-help">Регистрация приложения <svg class="icon"><use href="#i-arrow"/></svg></button></div></form></details>
+    </div>
+  </dialog>
 
   <div class="launch-stage" id="launch-stage" hidden aria-live="polite">
     <div class="launch-stage-image" id="launch-stage-image"></div>

@@ -1,6 +1,6 @@
 {
   "name": "veyra-launcher",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "private": true,
   "description": "Veyra Launcher — современный лаунчер Minecraft Java Edition для Windows",
   "main": "main/desktop.js",
@@ -9,11 +9,15 @@
     "start": "electron .",
     "dist": "electron-builder --win portable",
     "icon": "node scripts/create-icon.js",
-    "smoke": "node scripts/smoke.js"
+    "smoke": "node scripts/smoke.js",
+    "check:auth": "node scripts/auth-check.js",
+    "check:accounts": "node scripts/auth-ui-check.js",
+    "compat": "node scripts/build-compat.js"
   },
   "dependencies": {
     "@xmcl/core": "2.15.1",
-    "@xmcl/installer": "6.1.2"
+    "@xmcl/installer": "6.1.2",
+    "@xmcl/unzip": "2.1.2"
   },
   "devDependencies": {
     "electron": "44.6.0",

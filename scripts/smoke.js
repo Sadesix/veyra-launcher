@@ -27,6 +27,8 @@ async function main() {
     assert.equal(await page.locator('.nav-item').count(), 0);
     assert.equal(await page.locator('.wordmark').textContent(), 'veyra');
     assert.equal(await page.locator('.hero-atmosphere').count(), 0);
+    assert.equal(await page.locator('#hero-edit use').getAttribute('href'), '#i-settings');
+    assert.equal(await page.locator('use[href="#i-sliders"]').count(), 0);
     assert.ok(initial.maxMemoryGb <= initial.systemMemoryGb);
 
     const versions = await page.evaluate(() => window.launcher.refreshVersions());

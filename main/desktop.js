@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, protocol, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, safeStorage, shell } = require('electron');
 const { createHash, randomUUID } = require('node:crypto');
 const fs = require('node:fs/promises');
 const os = require('node:os');
@@ -8,6 +8,11 @@ const { getVersionList } = require('@xmcl/installer');
 const { installBase, installModdedLibraries } = require('./game-install');
 const { fetchLoaderVersions, installLoader, validVersion } = require('./loaders');
 const { requiredJava, resolveJava, scanJava, javaInfo } = require('./java-runtime');
+const { MicrosoftAuth, validClientId } = require('./microsoft-auth');
+const { AccountVault } = require('./account-vault');
+const { diagnoseFailure } = require('./game-diagnostics');
+const { prechecks, javaArguments } = require('./launch-runtime');
+const microsoftConfig = require('./microsoft-config.json');
 
 if (process.env.VEYRA_TEST_DATA_DIR) app.setPath('userData', path.resolve(process.env.VEYRA_TEST_DATA_DIR));
 protocol.registerSchemesAsPrivileged([{ scheme: 'veyra', privileges: { secure: true, standard: true, supportFetchAPI: true } }]);
@@ -22,6 +27,14 @@ let javaCandidates = [];
 let saveQueue = Promise.resolve();
 let progressAt = 0;
 let lastProgress = null;
+let accountSession = null;
+let accountVault;
+let authController = null;
+let authState = { busy: false, phase: '', error: '' };
+let lastCrash = null;
+let accountRevision = 0;
+let accountRefreshPromise = null;
+const microsoft = new MicrosoftAuth();
 
 const dataDir = () => app.getPath('userData');
 const settingsFile = () => path.join(dataDir(), 'settings.json');
@@ -37,8 +50,15 @@ function broadcast(payload) {
   if (window && !window.isDestroyed()) window.webContents.send('launcher:event', payload);
 }
 
+function redact(message) {
+  let safe = String(message);
+  for (const token of [accountSession?.accessToken, accountSession?.refreshToken]) {
+    if (token) safe = safe.split(token).join('[скрыто]');
+  }
+  return safe;
+}
 function log(message) {
-  fs.appendFile(logFile(), '[' + new Date().toISOString() + '] ' + message + '\n', 'utf8').catch(() => {});
+  fs.appendFile(logFile(), '[' + new Date().toISOString() + '] ' + redact(message) + '\n', 'utf8').catch(() => {});
 }
 
 function status(message, level = 'info') {
@@ -64,6 +84,8 @@ function validName(value) {
 function defaultSettings() {
   return {
     playerName: 'Player',
+    accountMode: 'local',
+    microsoftClientId: '',
     memoryGb: Math.min(4, maxMemoryGb()),
     javaPath: '',
     showSnapshots: false,
@@ -153,6 +175,8 @@ async function loadState() {
   const saved = await readJson(settingsFile(), {});
   settings = defaultSettings();
   if (/^[A-Za-z0-9_]{3,16}$/.test(saved.playerName || '')) settings.playerName = saved.playerName;
+  if (validClientId(saved.microsoftClientId)) settings.microsoftClientId = saved.microsoftClientId;
+  if (saved.accountMode === 'microsoft') settings.accountMode = 'microsoft';
   if (Number.isInteger(saved.memoryGb) && saved.memoryGb >= 1) settings.memoryGb = Math.min(saved.memoryGb, maxMemoryGb());
   if (typeof saved.javaPath === 'string' && (!saved.javaPath || path.isAbsolute(saved.javaPath))) settings.javaPath = saved.javaPath;
   settings.showSnapshots = Boolean(saved.showSnapshots);
@@ -226,7 +250,141 @@ function publicState() {
     maxMemoryGb: maxMemoryGb(),
     dataDirectory: dataDir(),
     instancesDirectory: instancesDir(),
+    account: {
+      mode: settings.accountMode,
+      name: settings.accountMode === 'microsoft' ? (accountSession?.profile.name || 'Microsoft') : settings.playerName,
+      microsoft: accountSession ? { ...accountSession.profile } : null,
+      configured: validClientId(microsoftClientId()),
+      clientId: microsoftClientId(),
+      auth: { ...authState },
+    },
+    lastCrash: lastCrash ? { instanceId: lastCrash.instanceId, message: lastCrash.message, hasReport: Boolean(lastCrash.file) } : null,
   };
+}
+
+function microsoftClientId() {
+  return settings.microsoftClientId || process.env.VEYRA_MICROSOFT_CLIENT_ID || microsoftConfig.clientId || '';
+}
+
+async function saveMicrosoftClientId(value) {
+  if (typeof value !== 'string' || (value.trim() && !validClientId(value.trim()))) throw new Error('Client ID должен быть идентификатором приложения Microsoft в формате UUID');
+  if (authController || accountRefreshPromise || activeOperation?.type === 'launch') throw new Error('Сначала завершите текущий вход или запуск');
+  const previous = microsoftClientId();
+  const effective = value.trim() || process.env.VEYRA_MICROSOFT_CLIENT_ID || microsoftConfig.clientId || '';
+  if (previous !== effective && accountSession) {
+    await accountVault.clear();
+    accountSession = null;
+    settings.accountMode = 'local';
+  }
+  accountRevision++;
+  settings.microsoftClientId = value.trim();
+  await persist();
+  emitState();
+  return true;
+}
+
+async function selectAccount(mode) {
+  if (!['local', 'microsoft'].includes(mode)) throw new Error('Неизвестный профиль');
+  if (activeOperation?.type === 'launch') throw new Error('Дождитесь запуска игры');
+  if (mode === 'microsoft' && !accountSession) throw new Error('Сначала войдите в Microsoft');
+  settings.accountMode = mode;
+  await persist();
+  emitState();
+  return true;
+}
+
+async function startMicrosoftLogin() {
+  if (authController) throw new Error('Вход уже выполняется');
+  if (accountRefreshPromise) throw new Error('Дождитесь обновления профиля');
+  if (activeOperation?.type === 'launch') throw new Error('Дождитесь запуска игры');
+  const clientId = microsoftClientId();
+  const controller = new AbortController();
+  const revision = ++accountRevision;
+  authController = controller;
+  authState = { busy: true, phase: 'Получаем код Microsoft…', error: '' };
+  emitState();
+  try {
+    const device = await microsoft.deviceCode(clientId, controller.signal);
+    if (controller.signal.aborted) throw new Error('Вход отменён');
+    authState = {
+      busy: true, phase: 'Откройте Microsoft и введите этот код.', error: '',
+      userCode: device.userCode, verificationUri: device.verificationUri, expiresAt: device.expiresAt,
+    };
+    emitState();
+    (async () => {
+      try {
+        const token = await microsoft.poll(clientId, device, controller.signal);
+        const session = await microsoft.minecraft(clientId, token, controller.signal, (phase) => {
+          authState.phase = phase;
+          emitState();
+        });
+        if (!session.refreshToken) throw new Error('Microsoft не разрешил сохранять вход. Повторите вход с разрешением offline_access.');
+        if (controller.signal.aborted) return;
+        await accountVault.write(session);
+        if (controller.signal.aborted || revision !== accountRevision) {
+          if (revision === accountRevision) {
+            if (accountSession) await accountVault.write(accountSession);
+            else await accountVault.clear();
+          }
+          return;
+        }
+        accountSession = session;
+        settings.accountMode = 'microsoft';
+        await persist();
+        authState = { busy: false, phase: 'Вход выполнен', error: '' };
+        status('Microsoft: вход выполнен для ' + session.profile.name, 'success');
+      } catch (error) {
+        authState = { busy: false, phase: '', error: controller.signal.aborted ? '' : errorMessage(error) };
+      } finally {
+        if (authController === controller) authController = null;
+        emitState();
+      }
+    })();
+    return true;
+  } catch (error) {
+    if (authController === controller) authController = null;
+    authState = { busy: false, phase: '', error: controller.signal.aborted ? '' : errorMessage(error) };
+    emitState();
+    if (!controller.signal.aborted) throw error;
+    return false;
+  }
+}
+
+async function logoutMicrosoft() {
+  if (activeOperation?.type === 'launch') throw new Error('Дождитесь запуска игры');
+  authController?.abort();
+  accountRevision++;
+  await accountVault.clear();
+  accountSession = null;
+  settings.accountMode = 'local';
+  authState = { busy: false, phase: '', error: '' };
+  await persist();
+  emitState();
+  return true;
+}
+
+async function microsoftIdentity(signal, force = false) {
+  if (!accountSession || accountSession.clientId !== microsoftClientId()) throw new Error('Войдите в Microsoft через кнопку профиля');
+  let session = accountSession;
+  if (force || session.expiresAt <= Date.now() + 60000) {
+    if (!accountRefreshPromise) {
+      const revision = accountRevision;
+      const previous = session;
+      accountRefreshPromise = (async () => {
+        const token = await microsoft.refresh(previous.clientId, previous.refreshToken, signal);
+        token.refresh_token ||= previous.refreshToken;
+        const updated = await microsoft.minecraft(previous.clientId, token, signal);
+        if (revision !== accountRevision) throw new Error('Профиль изменился. Повторите действие.');
+        await accountVault.write(updated);
+        if (revision !== accountRevision) throw new Error('Профиль изменился. Повторите действие.');
+        accountSession = updated;
+        emitState();
+        return updated;
+      })().finally(() => { accountRefreshPromise = null; });
+    }
+    session = await accountRefreshPromise;
+  }
+  return { gameProfile: { ...session.profile }, accessToken: session.accessToken, userType: 'msa' };
 }
 
 function emitState() {
@@ -576,6 +734,7 @@ function offlineUuid(name) {
 async function launchInstance(id) {
   const instance = requireInstance(id);
   if (!instance.installed) throw new Error('Сначала установите экземпляр');
+  if (authController) throw new Error('Завершите Microsoft-вход или отмените его перед запуском');
   const operation = beginOperation('launch', id);
   try {
     const version = await Version.parse(instance.directory, instance.versionId);
@@ -586,24 +745,47 @@ async function launchInstance(id) {
       progress,
       operation.signal
     );
+    const identity = settings.accountMode === 'microsoft'
+      ? await microsoftIdentity(operation.signal)
+      : { gameProfile: { name: settings.playerName, id: offlineUuid(settings.playerName) }, accessToken: '0', userType: 'legacy' };
+    const extraJVMArgs = javaArguments();
+    if (instance.loader === 'neoforge' && instance.loaderVersion === '26.3.0.56-beta') {
+      const source = path.join(__dirname, '..', 'assets', 'compat', 'neoforge-version-guard.jar');
+      const agent = path.join(dataDir(), 'compat', 'neoforge-version-guard.jar');
+      await fs.mkdir(path.dirname(agent), { recursive: true });
+      await fs.copyFile(source, agent);
+      extraJVMArgs.push('-javaagent:' + agent);
+      log('Включена защита проверки обновлений NeoForge 26.3.0.56-beta');
+    }
     progress({ phase: 'Запуск', completed: 0, total: 0, message: 'Запускаем Minecraft' }, true);
     const child = await launch({
       gamePath: instance.directory,
       resourcePath: instance.directory,
       javaPath: java.path,
       version,
-      gameProfile: { name: settings.playerName, id: offlineUuid(settings.playerName) },
+      ...identity,
+      extraJVMArgs,
+      prechecks,
+      signal: operation.signal,
+      spawn: (...args) => {
+        operation.signal.throwIfAborted();
+        return require('node:child_process').spawn(...args);
+      },
       maxMemory: (instance.memoryGb || settings.memoryGb) * 1024,
       launcherName: 'Veyra Launcher',
       extraExecOption: { windowsHide: true },
     });
     gameProcess = { child, instanceId: id };
+    lastCrash = null;
+    let recentOutput = '';
+    const launchedAt = Date.now();
     instance.lastPlayedAt = new Date().toISOString();
     instance.launchCount++;
-    await persist().catch((error) => log('Не удалось сохранить историю запуска: ' + errorMessage(error)));
     const onOutput = (chunk) => {
-      const message = String(chunk).trim();
+      let message = redact(String(chunk).trim());
+      if (identity.accessToken !== '0') message = message.split(identity.accessToken).join('[защищено]');
       if (!message) return;
+      recentOutput = (recentOutput + '\n' + message).slice(-40000);
       log('[' + instance.name + '] ' + message);
       broadcast({ type: 'log', message: message.slice(-1500), instanceId: id });
     };
@@ -614,13 +796,29 @@ async function launchInstance(id) {
       if (gameProcess?.child === child) gameProcess = null;
       emitState();
     });
-    child.once('close', (code, signal) => {
+    child.once('close', async (code, signal) => {
       if (gameProcess?.child === child) gameProcess = null;
       emitState();
-      status(code === 0 ? 'Minecraft закрыт' : 'Игра завершилась с кодом ' + (code ?? signal ?? '?'), code === 0 ? 'info' : 'error');
+      if (code === 0) status('Minecraft закрыт');
+      else {
+        const message = diagnoseFailure(recentOutput, code, signal);
+        const reportRoot = path.join(instance.directory, 'crash-reports');
+        const entries = await fs.readdir(reportRoot, { withFileTypes: true }).catch(() => []);
+        const reports = await Promise.all(entries.filter((entry) => entry.isFile() && entry.name.endsWith('.txt')).map(async (entry) => {
+          const file = path.join(reportRoot, entry.name);
+          const stat = await fs.stat(file).catch(() => null);
+          return stat && stat.mtimeMs >= launchedAt - 2000 ? { file, time: stat.mtimeMs } : null;
+        }));
+        const file = reports.filter(Boolean).sort((a, b) => b.time - a.time)[0]?.file || '';
+        lastCrash = { instanceId: id, message, file };
+        status(message, 'error');
+        broadcast({ type: 'game-crash', message });
+        emitState();
+      }
     });
+    await persist().catch((error) => log('Не удалось сохранить историю запуска: ' + errorMessage(error)));
     emitState();
-    status('Minecraft запущен: ' + instance.name, 'success');
+    if (gameProcess?.child === child) status('Minecraft запущен: ' + instance.name, 'success');
     return { pid: child.pid || null };
   } catch (error) {
     reportError('Не удалось запустить игру', error);
@@ -653,6 +851,34 @@ async function pickJava() {
 }
 
 function registerIpc() {
+  ipcMain.handle('launcher:start-microsoft-login', () => startMicrosoftLogin());
+  ipcMain.handle('launcher:cancel-microsoft-login', () => { authController?.abort(); return true; });
+  ipcMain.handle('launcher:save-microsoft-client-id', (_event, value) => saveMicrosoftClientId(value));
+  ipcMain.handle('launcher:select-account', (_event, mode) => selectAccount(mode));
+  ipcMain.handle('launcher:logout-microsoft', () => logoutMicrosoft());
+  ipcMain.handle('launcher:refresh-account', async () => {
+    if (authController || activeOperation?.type === 'launch') throw new Error('Дождитесь завершения входа или запуска');
+    await microsoftIdentity(undefined, true);
+    return true;
+  });
+  ipcMain.handle('launcher:open-account-link', async (_event, target) => {
+    const links = {
+      login: authState.verificationUri,
+      profile: 'https://www.minecraft.net/msaprofile',
+      setup: 'https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app',
+    };
+    if (!links[target]) throw new Error('Адрес недоступен');
+    await shell.openExternal(links[target]);
+    return true;
+  });
+  ipcMain.handle('launcher:copy-login-code', () => { if (authState.userCode) clipboard.writeText(authState.userCode); return true; });
+  ipcMain.handle('launcher:open-crash-report', async () => {
+    const instance = requireInstance(lastCrash?.instanceId);
+    const target = lastCrash.file || path.join(instance.directory, 'logs');
+    const error = await shell.openPath(target);
+    if (error) throw new Error(error);
+    return true;
+  });
   ipcMain.handle('launcher:get-state', () => publicState());
   ipcMain.handle('launcher:refresh-versions', () => refreshVersions());
   ipcMain.handle('launcher:get-loader-versions', (_event, loader, mc) => fetchLoaderVersions(loader, mc));
@@ -697,6 +923,7 @@ function registerIpc() {
 }
 
 function createWindow() {
+  const acrylic = process.platform === 'win32' && Number(os.release().split('.')[2]) >= 22621;
   window = new BrowserWindow({
     width: 1460,
     height: 900,
@@ -706,7 +933,8 @@ function createWindow() {
     frame: false,
     title: 'Veyra Launcher',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
-    backgroundColor: '#080911',
+    backgroundColor: acrylic ? '#00000000' : '#080911',
+    ...(acrylic ? { backgroundMaterial: 'acrylic' } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -737,6 +965,10 @@ app.whenReady().then(async () => {
   });
   await fs.mkdir(dataDir(), { recursive: true });
   await loadState();
+  accountVault = new AccountVault(path.join(dataDir(), 'microsoft-session.bin'), safeStorage);
+  accountSession = await accountVault.read();
+  if (accountSession?.clientId !== microsoftClientId()) accountSession = null;
+  if (!accountSession) settings.accountMode = 'local';
   registerIpc();
   createWindow();
   refreshVersions().catch(() => {});
@@ -749,3 +981,4 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => app.quit());
+app.on('before-quit', () => authController?.abort());
