@@ -73,7 +73,7 @@ async function main() {
     await page.locator('.rail-button[data-view="settings"]').click();
     await page.locator('[data-atmosphere="mist"]').click();
     await page.locator('#save-settings').click();
-    assert.deepEqual((await page.evaluate(() => window.launcher.getState())).settings.appearance, { transparency: 18, brightness: 80, blur: 28 });
+    assert.deepEqual((await page.evaluate(() => window.launcher.getState())).settings.appearance, { transparency: 18, brightness: 80, blur: 28, picture: true });
     await assert.rejects(() => page.evaluate(() => window.launcher.saveSettings({ appearance: { transparency: 99 } })));
     await page.locator('.atmosphere-settings').scrollIntoViewIfNeeded();
     await page.waitForTimeout(500);
@@ -90,7 +90,7 @@ async function main() {
     const restored = await page.evaluate(() => window.launcher.getState());
     assert.equal(restored.instances.find(item => item.id === 'atlas').name, 'Atlas Prime');
     assert.equal(restored.instances.find(item => item.id === 'aurora').playedMs, 5460000);
-    assert.deepEqual(restored.settings.appearance, { transparency: 18, brightness: 80, blur: 28 });
+    assert.deepEqual(restored.settings.appearance, { transparency: 18, brightness: 80, blur: 28, picture: true });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.locator('#create-top').click();
     assert.equal(await page.locator('#create-dialog').evaluate(node => getComputedStyle(node).animationDuration), '1e-05s');

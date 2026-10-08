@@ -1,7 +1,12 @@
-const DEFAULT_APPEARANCE = { transparency: 0, brightness: 100, blur: 18 };
+const DEFAULT_APPEARANCE = { transparency: 0, brightness: 100, blur: 18, picture: true };
 const limits = { transparency: [0, 60], brightness: [30, 150], blur: [0, 40] };
 function appearance(value, strict = false) {
   const result = { ...DEFAULT_APPEARANCE };
+  if (value?.picture !== undefined) {
+    if (typeof value.picture !== 'boolean') {
+      if (strict) throw new Error('Выберите фон с картинкой или без картинки');
+    } else result.picture = value.picture;
+  }
   for (const [key, [min, max]] of Object.entries(limits)) {
     if (value?.[key] === undefined) continue;
     const number = value[key];

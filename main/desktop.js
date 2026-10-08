@@ -13,6 +13,8 @@ const { AccountVault } = require('./account-vault');
 const { diagnoseFailure } = require('./game-diagnostics');
 const { prechecks, javaArguments } = require('./launch-runtime');
 const { appearance } = require('./appearance');
+const { validPlayerName } = require('./local-profile');
+const { observeOutput, cleanOutput } = require('./install-output');
 const microsoftConfig = require('./microsoft-config.json');
 
 if (process.env.VEYRA_TEST_DATA_DIR) app.setPath('userData', path.resolve(process.env.VEYRA_TEST_DATA_DIR));
@@ -28,6 +30,7 @@ let javaCandidates = [];
 let saveQueue = Promise.resolve();
 let progressAt = 0;
 let lastProgress = null;
+let installConsole = null;
 let accountSession = null;
 let accountVault;
 let authController = null;
@@ -58,8 +61,15 @@ function redact(message) {
   }
   return safe;
 }
-function log(message) {
-  fs.appendFile(logFile(), '[' + new Date().toISOString() + '] ' + redact(message) + '\n', 'utf8').catch(() => {});
+function log(message, source = 'launcher') {
+  const safe = cleanOutput(redact(message));
+  fs.appendFile(logFile(), '[' + new Date().toISOString() + '] ' + safe + '\n', 'utf8').catch(() => {});
+  if (activeOperation?.type === 'install' && installConsole?.id === activeOperation.id) {
+    const lines = safe.split(/\r?\n/).filter(Boolean).map(text => ({ sequence: ++installConsole.sequence, time: Date.now(), source, text }));
+    installConsole.lines.push(...lines);
+    installConsole.lines = installConsole.lines.slice(-400);
+    broadcast({ type: 'install-output', id: installConsole.id, lines });
+  }
 }
 
 function status(message, level = 'info') {
@@ -85,6 +95,7 @@ function validName(value) {
 function defaultSettings() {
   return {
     playerName: 'Player',
+    allowAnySymbols: false,
     accountMode: 'local',
     microsoftClientId: '',
     memoryGb: Math.min(4, maxMemoryGb()),
@@ -177,7 +188,8 @@ async function readyMarker(instance) {
 async function loadState() {
   const saved = await readJson(settingsFile(), {});
   settings = defaultSettings();
-  if (/^[A-Za-z0-9_]{3,16}$/.test(saved.playerName || '')) settings.playerName = saved.playerName;
+  settings.allowAnySymbols = saved.allowAnySymbols === true;
+  if (validPlayerName(saved.playerName, settings.allowAnySymbols)) settings.playerName = saved.playerName;
   if (validClientId(saved.microsoftClientId)) settings.microsoftClientId = saved.microsoftClientId;
   if (saved.accountMode === 'microsoft') settings.accountMode = 'microsoft';
   if (Number.isInteger(saved.memoryGb) && saved.memoryGb >= 1) settings.memoryGb = Math.min(saved.memoryGb, maxMemoryGb());
@@ -232,6 +244,7 @@ function publicState() {
   return {
     settings: {
       playerName: settings.playerName,
+      allowAnySymbols: settings.allowAnySymbols,
       memoryGb: settings.memoryGb,
       javaPath: settings.javaPath,
       showSnapshots: settings.showSnapshots,
@@ -252,6 +265,7 @@ function publicState() {
     runningInstanceId: gameProcess?.instanceId || null,
     stoppingGame: Boolean(gameProcess?.stopping),
     runningSession: gameProcess ? { instanceId: gameProcess.instanceId, accountedAt: gameProcess.accountedAt, startedAt: gameProcess.startedAt } : null,
+    installConsole,
     appVersion: app.getVersion(),
     systemMemoryGb: systemMemoryGb(),
     maxMemoryGb: maxMemoryGb(),
@@ -412,6 +426,14 @@ function progress(value, force = false) {
     message: value.message || value.phase || 'Подготовка',
   };
   broadcast({ type: 'progress', ...lastProgress });
+  if (activeOperation?.type === 'install') {
+    const detail = lastProgress.phase + ' · ' + lastProgress.message;
+    if (detail !== activeOperation.lastConsoleProgress && (force || now - (activeOperation.consoleProgressAt || 0) > 1800)) {
+      activeOperation.lastConsoleProgress = detail;
+      activeOperation.consoleProgressAt = now;
+      log(detail, 'progress');
+    }
+  }
 }
 
 async function runTask(task, operation, label, onUpdate) {
@@ -427,7 +449,11 @@ async function runTask(task, operation, label, onUpdate) {
     }, force);
   };
   const context = {
-    onStart(child) { current = child; send(true); },
+    onStart(child) {
+      current = child;
+      if (operation.type === 'install' && child.name) log('[' + label + '] ' + child.name + (child.param ? ' ' + JSON.stringify(child.param).slice(0, 300) : ''), 'task');
+      send(true);
+    },
     onUpdate(child) { current = child; send(false); },
   };
   const timer = setInterval(() => send(false), 400);
@@ -442,7 +468,8 @@ function beginOperation(type, instanceId) {
   if (activeOperation) throw new Error('Дождитесь окончания текущей операции');
   if (gameProcess) throw new Error('Сначала закройте запущенную игру');
   const controller = new AbortController();
-  activeOperation = { type, instanceId, controller, signal: controller.signal, task: null };
+  activeOperation = { id: randomUUID(), type, instanceId, controller, signal: controller.signal, task: null };
+  if (type === 'install') installConsole = { id: activeOperation.id, instanceId, live: true, outcome: '', startedAt: Date.now(), sequence: 0, lines: [] };
   lastProgress = null;
   emitState();
   return activeOperation;
@@ -450,6 +477,11 @@ function beginOperation(type, instanceId) {
 
 function endOperation(operation) {
   if (activeOperation === operation) {
+    if (operation.type === 'install' && installConsole?.id === operation.id) {
+      installConsole.live = false;
+      installConsole.outcome = operation.outcome || 'error';
+      installConsole.endedAt = Date.now();
+    }
     activeOperation = null;
     lastProgress = null;
     emitState();
@@ -638,9 +670,10 @@ async function removeInstance(id) {
 async function saveSettings(patch) {
   if (!patch || typeof patch !== 'object') throw new Error('Некорректные настройки');
   const next = { ...settings };
-  if (patch.playerName !== undefined) {
-    if (!/^[A-Za-z0-9_]{3,16}$/.test(patch.playerName)) throw new Error('Имя игрока: 3–16 латинских букв, цифр или _');
-    next.playerName = patch.playerName;
+  if (patch.allowAnySymbols !== undefined) next.allowAnySymbols = patch.allowAnySymbols === true;
+  if (patch.playerName !== undefined) next.playerName = typeof patch.playerName === 'string' ? patch.playerName.trim().normalize('NFC') : patch.playerName;
+  if (!validPlayerName(next.playerName, next.allowAnySymbols)) {
+    throw new Error(next.allowAnySymbols ? 'Ник: от 1 до 32 символов, без переносов строк' : 'Имя игрока: 3–16 латинских букв, цифр или _');
   }
   if (patch.memoryGb !== undefined) {
     const memory = Number(patch.memoryGb);
@@ -699,7 +732,15 @@ async function installInstance(id) {
     let versionId = instance.minecraftVersion;
     if (instance.loader !== 'vanilla') {
       progress({ phase: 'Загрузчик', completed: 0, total: 0, message: 'Устанавливаем ' + instance.loader });
-      versionId = await installLoader(instance, java.path, (task) => runTask(task, operation, 'Загрузчик'));
+      versionId = await installLoader(instance, java.path, (task) => runTask(task, operation, 'Загрузчик'), {
+        spawn: (command, args, options) => {
+          operation.signal.throwIfAborted();
+          const child = require('node:child_process').spawn(command, args, { ...options, windowsHide: true });
+          observeOutput(child.stdout, 'stdout', (line, source) => { if (activeOperation === operation) log(line, source); });
+          observeOutput(child.stderr, 'stderr', (line, source) => { if (activeOperation === operation) log(line, source); });
+          return child;
+        },
+      });
       if (operation.signal.aborted) throw new Error('Установка отменена');
       await installModdedLibraries(instance.directory, versionId, operation, runTask, progress);
     }
@@ -720,11 +761,13 @@ async function installInstance(id) {
     await persist();
     emitState();
     status('Сборка «' + instance.name + '» готова', 'success');
+    operation.outcome = 'success';
     return publicState();
   } catch (error) {
     instance.installed = false;
     emitState();
     if (operation.signal.aborted || error?.name === 'CancelledError') {
+      operation.outcome = 'cancelled';
       status('Установка отменена');
       return publicState();
     }
@@ -967,6 +1010,10 @@ function registerIpc() {
     return true;
   });
   ipcMain.handle('launcher:get-logs', () => getLogs());
+  ipcMain.handle('launcher:copy-install-console', () => {
+    clipboard.writeText((installConsole?.lines || []).map(line => '[' + new Date(line.time).toISOString() + '] [' + line.source + '] ' + line.text).join('\n'));
+    return true;
+  });
   ipcMain.handle('launcher:window-minimize', () => { window?.minimize(); return true; });
   ipcMain.handle('launcher:window-maximize', () => {
     if (!window) return false;

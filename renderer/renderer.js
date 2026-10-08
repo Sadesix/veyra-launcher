@@ -7,6 +7,7 @@
   // Microsoft integration is retained while its public interface is paused.
   const MICROSOFT_UI_ENABLED = false;
   const loaderNames = { vanilla: 'Vanilla', fabric: 'Fabric', neoforge: 'NeoForge', forge: 'Forge' };
+  const loaderLabel = item => (loaderNames[item.loader] || item.loader) + (item.loader !== 'vanilla' && item.loaderVersion ? ' ' + item.loaderVersion : '');
   const loaderIcon = (loader) => '../assets/brands/' + ({ vanilla: 'minecraft', fabric: 'fabric', neoforge: 'neoforge', forge: 'forge' }[loader] || 'minecraft') + '.png';
   const icon = (name) => {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -28,9 +29,11 @@
     el('notice').hidden = false;
     el('notice-report').hidden = !crash;
   }
-  function toast(message) {
+  function toast(message, undo = null) {
     setText('toast-text', message);
     el('toast').hidden = false;
+    state.toastUndo = undo;
+    el('toast-undo').hidden = !undo;
     clearTimeout(state.toastTimer);
     state.toastTimer = setTimeout(() => { el('toast').hidden = true; }, 3800);
   }
@@ -41,7 +44,7 @@
   function showView(view) {
     hideContextMenu();
     if (state.view !== view) document.querySelector('.content').scrollTop = 0;
-    if (state.view === 'settings' && view !== 'settings') applyAppearance(state.data.settings.appearance);
+    if (state.view === 'settings' && view !== 'settings') applyAppearance(state.data?.settings.appearance);
     state.view = view;
     for (const page of document.querySelectorAll('[data-page]')) {
       const active = page.dataset.page === view;
@@ -63,7 +66,7 @@
   function filteredInstances() {
     const query = el('search-input').value.trim().toLowerCase();
     return instances().filter((item) => !query ||
-      (item.name + ' ' + item.minecraftVersion + ' ' + loaderNames[item.loader]).toLowerCase().includes(query))
+      (item.name + ' ' + item.minecraftVersion + ' ' + loaderLabel(item)).toLowerCase().includes(query))
       .sort((a, b) => Number(b.favorite) - Number(a.favorite));
   }
   function addCard() {
@@ -104,7 +107,8 @@
     loaderImage.src = loaderIcon(instance.loader);
     loaderImage.alt = '';
     const loaderText = document.createElement('span');
-    loaderText.textContent = loaderNames[instance.loader] || instance.loader;
+    loaderText.textContent = loaderLabel(instance);
+    pill.title = loaderLabel(instance);
     pill.append(loaderImage, loaderText);
     top.append(pill);
     if (instance.favorite) {
@@ -137,7 +141,7 @@
       const current = new Map([...grid.querySelectorAll('[data-instance-id]')].map(card => [card.dataset.instanceId, card]));
       const ordered = [];
       for (const [index, instance] of items.slice(0, limit).entries()) {
-        const signature = JSON.stringify([instance.name, instance.accent, instance.coverUrl, instance.favorite, instance.installed, instance.loader, instance.minecraftVersion]);
+        const signature = JSON.stringify([instance.name, instance.accent, instance.coverUrl, instance.favorite, instance.installed, instance.loader, instance.loaderVersion, instance.minecraftVersion]);
         let card = current.get(instance.id);
         if (!card || card.dataset.signature !== signature) {
           const replacement = instanceCard(instance);
@@ -159,6 +163,8 @@
   function renderHero() {
     const item = selected();
     transitionHero(item);
+    syncHeroName(item);
+    if (state.launchingId && state.launchingId !== item?.id) hideLaunchStage();
     el('hero-empty').hidden = Boolean(item);
     el('hero-active').hidden = !item;
     if (!item) {
@@ -179,14 +185,15 @@
     }
     el('hero-image').style.backgroundImage = item.coverUrl ? 'url("' + item.coverUrl + '")' : '';
     el('hero-favorite').hidden = !item.favorite;
-    setText('hero-name', item.name);
     el('hero-loader').querySelector('img').src = loaderIcon(item.loader);
-    el('hero-loader').querySelector('span').textContent = loaderNames[item.loader] || item.loader;
+    el('hero-loader').querySelector('span').textContent = loaderLabel(item);
+    el('hero-loader').title = loaderLabel(item);
     el('hero-version').querySelector('span').textContent = 'Minecraft ' + item.minecraftVersion;
     setText('hero-description', item.installed
       ? 'Сборка готова. Моды, сохранения и настройки останутся внутри этой сборки.'
       : 'Сборка создана. Установите игру, чтобы начать.');
-    setText('detail-loader', loaderNames[item.loader] || item.loader);
+    setText('detail-loader', loaderLabel(item));
+    el('detail-loader').title = loaderLabel(item);
     setText('detail-version', item.minecraftVersion);
     setText('detail-java', item.javaPath || state.data.settings.javaPath ? 'Своя Java' : 'Автоматически');
     setText('detail-memory', (item.memoryGb || state.data.settings.memoryGb) + ' ГБ');
@@ -209,8 +216,9 @@
     el('main-action').classList.toggle('button-primary', !running);
     el('main-action').disabled = Boolean(operation || stopping || (state.data.runningInstanceId && !running));
     el('hero-edit').disabled = working;
+    el('hero-console').hidden = state.data.installConsole?.instanceId !== item.id;
     const box = el('progress-box');
-    box.hidden = !working;
+    box.hidden = !working || operation.type !== 'install';
     el('cancel-operation').disabled = false;
     if (working) renderProgress(operation.progress || null);
     renderPlaytime();
@@ -235,6 +243,8 @@
     if (!state.data) return;
     const settings = state.data.settings;
     el('player-name').value = settings.playerName;
+    state.nicknameAny = settings.allowAnySymbols;
+    renderNicknameRules();
     setText('settings-account-status', (MICROSOFT_UI_ENABLED && state.data.account.mode === 'microsoft' ? 'Microsoft · ' : '') + state.data.account.name);
     const maximum = memoryMaximum();
     el('memory-gb').max = String(maximum);
@@ -293,6 +303,7 @@
     setText('stop-game-footer-label', state.data.stoppingGame ? 'Останавливаем…' : 'Остановить игру');
     renderHero();
     renderCards();
+    renderInstallConsole();
     setText('app-version', state.data.appVersion);
     if (el('create-dialog').open && state.versionsKey !== JSON.stringify(state.data.versions)) {
       state.versionsKey = JSON.stringify(state.data.versions);
@@ -305,8 +316,8 @@
     const auth = account.auth;
     setText('profile-chip-name', account.name);
     setText('profile-chip-mode', account.mode === 'microsoft' ? (MICROSOFT_UI_ENABLED ? 'Microsoft' : 'Игровой профиль') : 'Локальный профиль');
-    setText('rail-profile-initial', account.name.slice(0, 1).toUpperCase());
-    setText('profile-avatar', account.name.slice(0, 1).toUpperCase());
+    setText('rail-profile-initial', Array.from(account.name)[0]?.toUpperCase() || 'P');
+    setText('profile-avatar', Array.from(account.name)[0]?.toUpperCase() || 'P');
     setText('profile-active-name', account.name);
     setText('profile-active-mode', account.mode === 'microsoft' ? (MICROSOFT_UI_ENABLED ? 'Microsoft · Minecraft Java' : 'Игровой профиль') : 'Локальный профиль');
     el('profile-rail').title = 'Профиль: ' + account.name;
@@ -337,6 +348,8 @@
   function openProfile() {
     state.profileTab = MICROSOFT_UI_ENABLED ? state.data.account.mode : 'local';
     el('profile-name-input').value = state.data.settings.playerName;
+    state.nicknameAny = state.data.settings.allowAnySymbols;
+    renderNicknameRules();
     el('profile-feedback').hidden = true;
     renderProfile();
     showDialog(el('profile-dialog'));
@@ -491,6 +504,7 @@
     root.style.setProperty('--background-alpha', 1 - value.transparency / 100);
     root.style.setProperty('--background-brightness', value.brightness / 100);
     root.style.setProperty('--background-blur', value.blur + 'px');
+    root.style.setProperty('--background-picture', value.picture === false ? 0 : .1);
     if (native) {
       clearTimeout(state.appearanceTimer);
       state.appearanceTimer = setTimeout(() => api.previewAppearance(value).catch(() => {}), 120);
@@ -508,12 +522,187 @@
     preview.style.setProperty('--preview-alpha', 1 - value.transparency / 100);
     preview.style.setProperty('--preview-light', value.brightness / 100);
     preview.style.setProperty('--preview-blur', value.blur / 4 + 'px');
+    preview.classList.toggle('without-picture', value.picture === false);
+    el('appearance-blur').disabled = value.picture === false;
+    for (const button of document.querySelectorAll('[data-background-picture]')) {
+      const active = (button.dataset.backgroundPicture === 'true') === (value.picture !== false);
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+    }
     for (const button of document.querySelectorAll('[data-atmosphere]')) {
       const preset = atmospherePresets[button.dataset.atmosphere];
       const active = Object.keys(preset).every(key => preset[key] === value[key]);
       button.classList.toggle('is-selected', active);
       button.setAttribute('aria-pressed', String(active));
     }
+  }
+  function finishNameTyping(value) {
+    clearTimeout(state.nameTimer);
+    state.nameTyping = false;
+    el('hero-name').classList.remove('is-typing');
+    if (value !== undefined) setText('hero-name', value);
+  }
+  function syncHeroName(item) {
+    if (!item) { finishNameTyping(); state.nameInstanceId = ''; return; }
+    if (state.nameInstanceId !== item.id) {
+      finishNameTyping(item.name);
+      state.nameInstanceId = item.id;
+      state.nameActual = item.name;
+      el('hero-name').setAttribute('aria-label', item.name);
+      return;
+    }
+    if (state.nameActual === item.name) return;
+    const previous = Array.from(el('hero-name').textContent);
+    const next = Array.from(item.name);
+    state.nameActual = item.name;
+    finishNameTyping();
+    el('hero-name').setAttribute('aria-label', item.name);
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return finishNameTyping(item.name);
+    state.nameTyping = true;
+    el('hero-name').classList.add('is-typing');
+    let removing = true;
+    let typed = 0;
+    const step = () => {
+      if (removing) {
+        previous.splice(Math.max(0, previous.length - Math.max(1, Math.ceil(previous.length / 15))));
+        setText('hero-name', previous.join(''));
+        if (!previous.length) removing = false;
+        state.nameTimer = setTimeout(step, removing ? 18 : 100);
+      } else {
+        typed = Math.min(next.length, typed + Math.max(1, Math.ceil(next.length / 28)));
+        setText('hero-name', next.slice(0, typed).join(''));
+        if (typed < next.length) state.nameTimer = setTimeout(step, 24);
+        else finishNameTyping(item.name);
+      }
+    };
+    state.nameTimer = setTimeout(step, 60);
+  }
+  function renderNicknameRules() {
+    const any = Boolean(state.nicknameAny);
+    for (const id of ['profile-any-symbols', 'settings-any-symbols']) el(id).checked = any;
+    for (const id of ['profile-name-input', 'player-name']) {
+      const input = el(id);
+      input.minLength = any ? 1 : 3;
+      input.maxLength = any ? 64 : 16;
+      if (any) input.removeAttribute('pattern'); else input.setAttribute('pattern', '[A-Za-z0-9_]{3,16}');
+      validateNicknameInput(input);
+    }
+    const hint = any ? '1–32 символа: кириллица, пробелы, эмодзи. Сервер может ограничивать ник.' : '3–16 латинских букв, цифр или _. Enter сохраняет ник.';
+    setText('profile-nickname-hint', hint);
+    setText('settings-nickname-hint', hint);
+  }
+  function validateNicknameInput(input) {
+    input.setCustomValidity(state.nicknameAny && (Array.from(input.value.trim()).length > 32 || /\p{Cc}/u.test(input.value)) ? 'Ник: не более 32 символов, без переносов строк' : '');
+  }
+  function renderLoaderTiles() {
+    const target = el('loader-version-tiles');
+    const query = el('loader-version-search').value.trim().toLowerCase();
+    const versions = (state.loaderVersions || []).filter(item => item.id.toLowerCase().includes(query));
+    target.replaceChildren();
+    for (const item of versions.slice(0, state.loaderVersionLimit || 8)) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'version-tile';
+      button.dataset.loaderVersion = item.id;
+      button.classList.toggle('is-selected', el('create-loader-version').value === item.id);
+      button.setAttribute('aria-pressed', String(el('create-loader-version').value === item.id));
+      const label = document.createElement('strong'); label.textContent = item.id;
+      const hint = document.createElement('small'); hint.textContent = item.recommended ? 'Рекомендуется' : item.stable ? 'Стабильная' : 'Beta / preview';
+      button.append(icon('check'), label, hint);
+      button.addEventListener('click', () => {
+        el('create-loader-version').value = item.id;
+        setText('chosen-loader-version', item.id);
+        for (const peer of target.querySelectorAll('button')) {
+          peer.classList.toggle('is-selected', peer === button);
+          peer.setAttribute('aria-pressed', String(peer === button));
+        }
+      });
+      target.append(button);
+    }
+    setText('chosen-loader-version', el('create-loader-version').value || '');
+    el('loader-version-more').hidden = versions.length <= (state.loaderVersionLimit || 8);
+  }
+  function setConsoleVisible(visible) {
+    const panel = el('install-scroll');
+    const dashboard = panel.closest('.dashboard-grid');
+    if (visible) {
+      clearTimeout(state.consoleCloseTimer);
+      panel.classList.remove('is-folding');
+      panel.hidden = false;
+      dashboard.classList.add('console-open');
+    } else if (!panel.hidden && !panel.classList.contains('is-folding')) {
+      panel.classList.add('is-folding');
+      state.consoleCloseTimer = setTimeout(() => {
+        panel.hidden = true;
+        panel.classList.remove('is-folding');
+        dashboard.classList.remove('console-open');
+      }, window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 480);
+    }
+  }
+  function renderInstallConsole() {
+    const session = state.data.installConsole;
+    const available = session && instances().some(item => item.id === session.instanceId);
+    el('console-footer').hidden = !available;
+    if (!session) return setConsoleVisible(false);
+    if (state.consoleId !== session.id) {
+      state.consoleId = session.id;
+      state.consoleOpen = session.live;
+      state.consolePaused = false;
+      state.consoleFollow = true;
+      state.consoleRenderedSequence = 0;
+      el('install-console-output').replaceChildren();
+    }
+    const item = instances().find(item => item.id === session.instanceId);
+    setText('console-build-name', item?.name || 'Сборка');
+    setText('console-status', session.live ? 'Устанавливаем' : ({ success: 'Готово', cancelled: 'Отменено', error: 'Ошибка установки' }[session.outcome] || 'Завершено'));
+    el('console-live').classList.toggle('is-live', session.live);
+    setConsoleVisible(Boolean(state.consoleOpen && session.instanceId === selected()?.id));
+    renderConsoleContent();
+  }
+  function scheduleConsoleRender() {
+    if (state.consoleRenderTimer) return;
+    state.consoleRenderTimer = setTimeout(() => { state.consoleRenderTimer = null; renderConsoleContent(); }, 60);
+  }
+  function renderConsoleContent() {
+    const session = state.data?.installConsole;
+    if (!session) return;
+    const lines = session.lines;
+    const last = lines.at(-1)?.sequence || 0;
+    setText('console-line-count', last + ' строк' + (last > 400 ? ' · последние 400' : ''));
+    el('console-copy').disabled = !lines.length;
+    el('console-pause').setAttribute('aria-pressed', String(Boolean(state.consolePaused)));
+    el('console-pause').querySelector('span').textContent = state.consolePaused ? 'Продолжить' : 'Пауза';
+    el('console-pause').querySelector('use').setAttribute('href', '#i-' + (state.consolePaused ? 'play' : 'pause'));
+    if (state.consolePaused || el('install-scroll').hidden) return;
+    const output = el('install-console-output');
+    const fragment = document.createDocumentFragment();
+    for (const line of lines.filter(line => line.sequence > (state.consoleRenderedSequence || 0))) {
+      const row = document.createElement('span');
+      row.className = 'console-line source-' + line.source;
+      row.title = line.source;
+      const timestamp = document.createElement('span');
+      timestamp.className = 'console-timestamp';
+      timestamp.textContent = new Date(line.time).toLocaleTimeString('ru-RU', { hour12: false }) + ' ';
+      row.append(timestamp, document.createTextNode(line.text + '\n'));
+      fragment.append(row);
+      state.consoleRenderedSequence = line.sequence;
+    }
+    output.append(fragment);
+    while (output.childElementCount > 400) output.firstElementChild.remove();
+    if (state.consoleFollow) {
+      state.consoleAutoScroll = true;
+      output.scrollTop = output.scrollHeight;
+      requestAnimationFrame(() => { state.consoleAutoScroll = false; });
+    }
+  }
+  async function revealConsole() {
+    const session = state.data.installConsole;
+    if (!session) return;
+    const result = await action(() => api.selectInstance(session.instanceId));
+    if (!result) return;
+    showView('home');
+    state.consoleOpen = true;
+    renderInstallConsole();
   }
   function hideContextMenu() { el('build-context-menu').hidden = true; }
   function openContextMenu(event, id) {
@@ -568,25 +757,34 @@
     field.hidden = loader === 'vanilla';
     if (field.hidden) { el('create-submit').disabled = !el('create-version').value; return; }
     const select = el('create-loader-version');
+    state.loaderVersions = [];
+    state.loaderVersionLimit = 8;
+    el('loader-version-search').value = '';
     select.replaceChildren(new Option('Получаем версии…', ''));
     el('loader-version-hint').textContent = 'Ищем совместимые версии загрузчика…';
     el('create-submit').disabled = true;
+    renderLoaderTiles();
     try {
       const versions = await api.getLoaderVersions(loader, el('create-version').value);
       if (token !== state.loaderRequest) return;
       select.replaceChildren();
+      state.loaderVersions = versions;
       if (!versions.length) {
         select.add(new Option('Нет совместимой версии', ''));
         el('loader-version-hint').textContent = 'Попробуйте другую версию Minecraft или загрузчик.';
+        renderLoaderTiles();
         return;
       }
-      for (const item of versions.slice(0, 80)) select.add(new Option(item.id + (item.stable === false ? ' · beta' : ''), item.id));
+      for (const item of versions) select.add(new Option(item.label || item.id, item.id));
+      select.value = (versions.find(item => item.recommended) || versions.find(item => item.stable) || versions[0]).id;
+      renderLoaderTiles();
       el('loader-version-hint').textContent = versions.length + ' совместимых версий';
       el('create-submit').disabled = false;
     } catch (error) {
       if (token !== state.loaderRequest) return;
       select.replaceChildren(new Option('Не удалось получить версии', ''));
       el('loader-version-hint').textContent = friendlyError(error);
+      renderLoaderTiles();
     }
   }
   function openCreate() {
@@ -607,7 +805,7 @@
     if (!item) return;
     state.editingId = item.id;
     setText('instance-dialog-title', item.name);
-    setText('instance-dialog-meta', loaderNames[item.loader] + ' · Minecraft ' + item.minecraftVersion);
+    setText('instance-dialog-meta', loaderLabel(item) + ' · Minecraft ' + item.minecraftVersion);
     el('edit-name').value = item.name;
     el('edit-note').value = item.note || '';
     el('edit-memory-default').checked = item.memoryGb == null;
@@ -641,6 +839,7 @@
   function openQuickRename() {
     const item = selected();
     if (!item) return;
+    finishNameTyping(item.name);
     el('hero-rename-input').value = item.name;
     el('hero-title-line').hidden = true;
     el('hero-rename-form').hidden = false;
@@ -650,25 +849,30 @@
   function closeQuickRename() {
     el('hero-rename-form').hidden = true;
     el('hero-title-line').hidden = false;
+    el('hero-rename-input').value = '';
   }
   function hideLaunchStage() {
     const stage = el('launch-stage');
     if (stage.hidden) return;
+    clearTimeout(state.launchHideTimer);
+    el('hero-card').classList.remove('is-launching');
     stage.classList.add('is-exiting');
-    setTimeout(() => { stage.hidden = true; stage.classList.remove('is-exiting'); }, 300);
+    state.launchHideTimer = setTimeout(() => { stage.hidden = true; stage.classList.remove('is-exiting'); state.launchingId = ''; }, 240);
   }
   async function launchWithScene(item) {
     const stage = el('launch-stage');
+    clearTimeout(state.launchHideTimer);
+    state.launchingId = item.id;
     stage.classList.remove('is-exiting');
-    el('launch-stage-image').style.backgroundImage = item.coverUrl ? 'url("' + item.coverUrl + '")' : '';
     setText('launch-stage-name', item.name);
     setText('launch-stage-message', 'Проверяем Java и файлы игры…');
     stage.hidden = false;
+    el('hero-card').classList.add('is-launching');
     const started = Date.now();
     const result = await action(() => api.launchInstance(item.id));
     if (result) {
-      setText('launch-stage-message', 'Minecraft запущен. Хорошей игры.');
-      await new Promise((resolve) => setTimeout(resolve, Math.max(0, 950 - (Date.now() - started))));
+      setText('launch-stage-message', 'Процесс Minecraft запущен');
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, 700 - (Date.now() - started))));
     }
     hideLaunchStage();
   }
@@ -679,6 +883,12 @@
   function receive(event) {
     if (!event || typeof event !== 'object') return;
     if (event.type === 'state') { state.data = event.state; render(); }
+    if (event.type === 'install-output' && state.data?.installConsole?.id === event.id) {
+      const session = state.data.installConsole;
+      session.lines.push(...event.lines.filter(line => line.sequence > (session.lines.at(-1)?.sequence || 0)));
+      session.lines = session.lines.slice(-400);
+      scheduleConsoleRender();
+    }
     if (event.type === 'progress') {
       if (state.data?.operation) state.data.operation.progress = event;
       renderHero();
@@ -753,8 +963,37 @@
       el('appearance-' + key).addEventListener('input', event => { state.appearanceDraft[key] = Number(event.target.value); renderAppearance(); });
     }
     for (const button of document.querySelectorAll('[data-atmosphere]')) {
-      button.addEventListener('click', () => { state.appearanceDraft = { ...atmospherePresets[button.dataset.atmosphere] }; renderAppearance(); });
+      button.addEventListener('click', () => { state.appearanceDraft = { ...state.appearanceDraft, ...atmospherePresets[button.dataset.atmosphere] }; renderAppearance(); });
     }
+    for (const button of document.querySelectorAll('[data-background-picture]')) {
+      button.addEventListener('click', () => { state.appearanceDraft.picture = button.dataset.backgroundPicture === 'true'; renderAppearance(); });
+    }
+    for (const id of ['profile-any-symbols', 'settings-any-symbols']) {
+      el(id).addEventListener('change', event => { state.nicknameAny = event.target.checked; renderNicknameRules(); });
+    }
+    for (const id of ['profile-name-input', 'player-name']) el(id).addEventListener('input', event => validateNicknameInput(event.target));
+    el('loader-version-search').addEventListener('input', () => { state.loaderVersionLimit = 8; renderLoaderTiles(); });
+    el('loader-version-search').addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); el('loader-version-tiles').querySelector('button')?.click(); }
+    });
+    el('loader-version-more').addEventListener('click', () => { state.loaderVersionLimit += 8; renderLoaderTiles(); });
+    el('create-loader-version').addEventListener('change', renderLoaderTiles);
+    for (const id of ['hero-console', 'console-footer']) el(id).addEventListener('click', revealConsole);
+    el('console-close').addEventListener('click', () => { state.consoleOpen = false; renderInstallConsole(); });
+    el('console-pause').addEventListener('click', () => { state.consolePaused = !state.consolePaused; renderConsoleContent(); });
+    el('console-follow').addEventListener('click', () => { state.consoleFollow = true; state.consolePaused = false; renderConsoleContent(); });
+    el('install-console-output').addEventListener('scroll', event => {
+      if (state.consoleAutoScroll) return;
+      state.consoleFollow = event.target.scrollHeight - event.target.scrollTop - event.target.clientHeight < 12;
+    });
+    el('console-copy').addEventListener('click', async () => { if (await action(() => api.copyInstallConsole())) toast('Вывод установки скопирован'); });
+    el('toast-undo').addEventListener('click', async () => {
+      const undo = state.toastUndo;
+      if (!undo) return;
+      el('toast-undo').disabled = true;
+      await action(undo);
+      el('toast-undo').disabled = false;
+    });
     el('version-search').addEventListener('input', () => { state.versionLimit = 24; renderVersionTiles(); });
     el('version-search').addEventListener('keydown', event => {
       if (event.key === 'Enter') { event.preventDefault(); el('version-tiles').querySelector('button')?.click(); }
@@ -779,6 +1018,12 @@
     }
     el('search-input').addEventListener('input', renderCards);
     document.addEventListener('keydown', (event) => {
+      const dialog = document.querySelector('dialog[open]:not(.is-closing)');
+      if (event.key === 'Escape' && dialog && !event.defaultPrevented) {
+        event.preventDefault();
+        closeDialog(dialog);
+        return;
+      }
       if (event.ctrlKey && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         showView('instances');
@@ -809,7 +1054,7 @@
     }
     el('profile-name-form').addEventListener('submit', async (event) => {
       event.preventDefault();
-      const saved = await profileAction(() => api.saveSettings({ playerName: el('profile-name-input').value.trim() }));
+      const saved = await profileAction(() => api.saveSettings({ playerName: el('profile-name-input').value.trim(), allowAnySymbols: el('profile-any-symbols').checked }));
       if (saved) {
         await profileAction(() => api.selectAccount('local'));
         el('player-name').value = state.data.settings.playerName;
@@ -873,8 +1118,15 @@
       event.preventDefault();
       const item = selected();
       if (!item) return closeQuickRename();
+      const previousName = item.name;
       const updated = await action(() => api.updateInstance(item.id, { name: el('hero-rename-input').value.trim() }));
-      if (updated) { closeQuickRename(); toast('Название изменено'); }
+      if (updated) {
+        closeQuickRename();
+        toast('Название изменено', async () => {
+          const restored = await api.updateInstance(item.id, { name: previousName });
+          if (restored) toast('Прежнее название возвращено');
+        });
+      }
     });
     const hero = el('hero-card');
     hero.addEventListener('pointermove', (event) => {
@@ -995,6 +1247,7 @@
     el('save-settings').addEventListener('click', async () => {
       const saved = await action(() => api.saveSettings({
         playerName: el('player-name').value.trim(),
+        allowAnySymbols: el('settings-any-symbols').checked,
         memoryGb: Number(el('memory-gb').value),
         javaPath: state.javaMode === 'auto' ? '' : el('java-path').value,
         showSnapshots: el('show-snapshots').checked,

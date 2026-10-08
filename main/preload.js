@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('launcher', Object.freeze({
   openInstanceFolder: (id) => invoke('open-instance-folder', id),
   openDataFolder: () => invoke('open-data-folder'),
   getLogs: () => invoke('get-logs'),
+  copyInstallConsole: () => invoke('copy-install-console'),
   minimizeWindow: () => invoke('window-minimize'),
   maximizeWindow: () => invoke('window-maximize'),
   closeWindow: () => invoke('window-close'),

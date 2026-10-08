@@ -111,7 +111,7 @@ async function main() {
     await page.locator('.rail-button[data-view="settings"]').click();
     assert.equal(await page.locator('#memory-range').getAttribute('max'), String(initial.maxMemoryGb));
     assert.equal(await page.locator('#memory-gb').getAttribute('max'), String(initial.maxMemoryGb));
-    assert.match(await page.locator('.toggle-row').textContent(), /Snapshots/);
+    assert.match(await page.locator('#show-snapshots').locator('..').textContent(), /Snapshots/);
     await page.locator('#player-name').fill('SmokePlayer');
     const memoryToUse = Math.min(6, initial.maxMemoryGb);
     await page.locator('#memory-gb').fill(String(memoryToUse));

@@ -81,7 +81,7 @@ async function fetchLoaderVersions(loader, minecraftVersion) {
   }
 }
 
-async function installLoader(instance, javaPath, runTask) {
+async function installLoader(instance, javaPath, runTask, processOptions = {}) {
   if (instance.loader === 'vanilla') return instance.minecraftVersion;
   if (!validVersion(instance.loaderVersion)) throw new Error('Выберите версию загрузчика');
   const directory = instance.directory;
@@ -102,6 +102,7 @@ async function installLoader(instance, javaPath, runTask) {
         path: 'https://maven.minecraftforge.net/net/minecraftforge/forge/' + full + '/forge-' + full + '-installer.jar',
       },
     }, directory, {
+      ...processOptions,
       side: 'client',
       java: javaPath,
       mavenHost: ['https://maven.minecraftforge.net', 'https://maven.neoforged.net/releases'],
@@ -110,6 +111,7 @@ async function installLoader(instance, javaPath, runTask) {
   }
   if (instance.loader === 'neoforge') {
     const task = installNeoForgedTask('neoforge', instance.loaderVersion, directory, {
+      ...processOptions,
       side: 'client',
       java: javaPath,
       mavenHost: ['https://maven.neoforged.net/releases', 'https://maven.minecraftforge.net'],

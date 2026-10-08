@@ -17,6 +17,7 @@
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></symbol>
     <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 4 12 8-12 8z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
     <symbol id="i-stop" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 20h16"/></symbol>
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
@@ -62,7 +63,7 @@
         <div class="topbar-title"><span class="wordmark">veyra</span><strong id="view-title">Главная</strong></div>
         <label class="search-box"><svg class="icon"><use href="#i-search"/></svg><input id="search-input" type="search" placeholder="Найти сборку" aria-label="Найти сборку" /><kbd>Ctrl K</kbd></label>
         <button class="profile-chip" id="profile-top" type="button" title="Профиль и никнейм"><svg class="icon"><use href="#i-user"/></svg><span><strong id="profile-chip-name">Player</strong><small id="profile-chip-mode">Локальный профиль</small></span></button>
-        <button class="button button-primary top-create" type="button" id="create-top"><svg class="icon"><use href="#i-plus"/></svg><span>Новая сборка</span></button>
+        <button class="button create-control top-create" type="button" id="create-top"><svg class="icon"><use href="#i-plus"/></svg><span>Новая сборка</span></button>
         <div class="window-controls">
           <button type="button" id="window-minimize" aria-label="Свернуть"><svg class="icon"><use href="#i-minimize"/></svg></button>
           <button type="button" id="window-maximize" aria-label="Развернуть"><svg class="icon"><use href="#i-maximize"/></svg></button>
@@ -74,7 +75,7 @@
 
       <main class="content">
         <section class="page is-visible" id="home-page" data-page="home">
-          <div class="page-heading"><div><span class="eyebrow">ВАША БИБЛИОТЕКА</span><h1 class="greeting"><span id="greeting-time">Добрый вечер</span>, <span id="greeting-name">Player</span><em>.</em></h1><p>Продолжите свою сборку или начните новую. Всё нужное уже на своём месте.</p></div><span class="page-count" id="home-count">0 сборок</span></div>
+          <div class="page-heading"><div><h1 class="greeting"><span id="greeting-time">Добрый вечер</span>, <span id="greeting-name">Player</span><em>.</em></h1><p>Продолжите свою сборку или начните новую. Всё нужное уже на своём месте.</p></div><span class="page-count" id="home-count">0 сборок</span></div>
 
           <div class="dashboard-grid">
             <section class="hero-card" id="hero-card">
@@ -83,26 +84,28 @@
                 <span class="hero-kicker"><svg class="icon"><use href="#i-spark"/></svg> НАЧНИТЕ СВОЮ ИСТОРИЮ</span>
                 <h2>Создайте первую<br />сборку</h2>
                 <p>Выберите версию Minecraft и загрузчик: Vanilla, Fabric, NeoForge или Forge. Veyra подготовит отдельную папку и подходящую Java.</p>
-                <button class="button button-primary hero-main-button" type="button" id="create-empty"><svg class="icon"><use href="#i-plus"/></svg>Создать сборку</button>
+                <button class="button create-control hero-create" type="button" id="create-empty"><span class="create-symbol"><svg class="icon"><use href="#i-plus"/></svg></span><span>Создать сборку</span><svg class="icon create-arrow"><use href="#i-arrow"/></svg></button>
               </div>
               <div class="hero-content" id="hero-active" hidden>
                 <span class="hero-kicker"><svg class="icon"><use href="#i-spark"/></svg> ВЫБРАННАЯ СБОРКА</span>
                 <div class="hero-badges"><span class="pill" id="hero-loader"><img class="brand-icon" src="../assets/brands/minecraft.png" alt="" /><span>Vanilla</span></span><span class="pill pill-ghost" id="hero-version"><img class="brand-icon" src="../assets/brands/minecraft.png" alt="" /><span>Minecraft</span></span><span class="pill pill-favorite" id="hero-favorite" hidden><svg class="icon"><use href="#i-star"/></svg> ИЗБРАННОЕ</span></div>
-                <div class="hero-title-line" id="hero-title-line"><h2 id="hero-name">Моя сборка</h2><button class="hero-rename" type="button" id="hero-rename" aria-label="Переименовать сборку" title="Переименовать"><svg class="icon"><use href="#i-edit"/></svg></button></div>
-                <form id="hero-rename-form" class="hero-rename-form" hidden><input id="hero-rename-input" type="text" minlength="2" maxlength="40" aria-label="Новое название сборки" /><button type="submit" aria-label="Сохранить название"><svg class="icon"><use href="#i-check"/></svg></button><button type="button" id="hero-rename-cancel" aria-label="Отмена"><svg class="icon"><use href="#i-close"/></svg></button></form>
+<div class="hero-name-slot"><div class="hero-title-line" id="hero-title-line"><h2 id="hero-name">Моя сборка</h2><button class="hero-rename" type="button" id="hero-rename" aria-label="Переименовать сборку" title="Переименовать"><svg class="icon"><use href="#i-edit"/></svg></button></div>
+                <form id="hero-rename-form" class="hero-rename-form" hidden><input id="hero-rename-input" type="text" minlength="2" maxlength="40" aria-label="Новое название сборки" /><button type="submit" aria-label="Сохранить название"><svg class="icon"><use href="#i-check"/></svg></button><button type="button" id="hero-rename-cancel" aria-label="Отмена"><svg class="icon"><use href="#i-close"/></svg></button></form></div>
                 <p id="hero-description">Отдельная папка игры готова к вашей сборке.</p>
                 <div class="hero-actions">
                   <button class="button button-primary hero-main-button" type="button" id="main-action"><svg class="icon" id="main-action-icon"><use href="#i-download"/></svg><span id="main-action-label">Установить</span></button>
                   <button class="button-icon hero-utility" type="button" id="hero-folder" title="Открыть папку" aria-label="Открыть папку"><svg class="icon"><use href="#i-folder"/></svg></button>
-                  <button class="button-icon hero-utility" type="button" id="hero-edit" title="Настройки сборки" aria-label="Настройки сборки"><svg class="icon"><use href="#i-settings"/></svg></button>
+                  <button class="button-icon hero-utility" type="button" id="hero-console" title="Консоль установки" aria-label="Консоль установки" hidden><svg class="icon"><use href="#i-terminal"/></svg></button><button class="button-icon hero-utility" type="button" id="hero-edit" title="Настройки сборки" aria-label="Настройки сборки"><svg class="icon"><use href="#i-settings"/></svg></button>
                 </div>
                 <div class="progress-box" id="progress-box" hidden><div class="progress-head"><strong id="progress-phase">Подготовка</strong><span id="progress-percent"></span></div><div class="progress-track" id="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span id="progress-fill"></span></div><div class="progress-foot"><span id="progress-message"></span><button type="button" id="cancel-operation">Отменить</button></div></div>
+<div class="launch-stage" id="launch-stage" hidden role="status"><span class="launch-pulse"><svg class="icon"><use href="#i-play"/></svg></span><div class="launch-stage-copy"><strong id="launch-stage-name">Ваша сборка</strong><p id="launch-stage-message">Проверяем Java и файлы…</p></div><button class="launch-stage-dismiss" type="button" id="launch-stage-dismiss" aria-label="Скрыть запуск"><svg class="icon"><use href="#i-close"/></svg></button></div>
               </div>
             </section>
 
             <aside class="dashboard-side">
               <section class="glass-card active-details"><div class="section-title"><span class="section-icon"><img class="brand-icon" src="../assets/brands/minecraft.png" alt="" /></span><h3>Активная сборка</h3></div><div class="detail-row"><span>Загрузчик</span><strong id="detail-loader">—</strong></div><div class="detail-row"><span>Версия</span><strong id="detail-version">—</strong></div><div class="detail-row"><span>Java</span><strong id="detail-java">Автоматически</strong></div><div class="detail-row"><span>Память</span><strong id="detail-memory">4 ГБ</strong></div><div class="detail-row"><span>Папка</span><strong id="detail-folder">—</strong></div></section>
               <section class="glass-card memory-capsule"><div class="section-title"><span class="section-icon"><svg class="icon"><use href="#i-spark"/></svg></span><div><h3>Капсула сборки</h3><p>Личная история сборки</p></div></div><div class="playtime-display"><span class="eyebrow">ВРЕМЯ В СБОРКЕ</span><strong id="capsule-playtime">0 мин</strong><small id="capsule-session">Впереди первая игра</small></div><p class="capsule-note" id="capsule-note">Здесь появится заметка к сборке.</p><div class="capsule-stats"><span>ЗАПУСКОВ <strong id="capsule-launches">0</strong></span><span>ПОСЛЕДНИЙ РАЗ <strong id="capsule-last">—</strong></span></div></section>
+<section class="install-scroll" id="install-scroll" aria-label="Консоль установки" hidden><div class="scroll-paper"><div class="scroll-head"><div><span class="scroll-live" id="console-live"></span><strong>Консоль установки</strong><small id="console-build-name"></small></div><button class="button-icon" type="button" id="console-close" aria-label="Свернуть консоль"><svg class="icon"><use href="#i-close"/></svg></button></div><div class="console-meta"><span id="console-status">Устанавливаем</span><span id="console-line-count">0 строк</span></div><pre id="install-console-output" tabindex="0" aria-label="Вывод установки"></pre><div class="console-toolbar"><button type="button" id="console-pause" aria-pressed="false"><svg class="icon"><use href="#i-pause"/></svg><span>Пауза</span></button><button type="button" id="console-follow" title="Прокрутить к последней строке"><svg class="icon"><use href="#i-chevron"/></svg>К концу</button><button type="button" id="console-copy"><svg class="icon"><use href="#i-copy"/></svg>Копировать</button></div></div><i class="scroll-roller scroll-top" aria-hidden="true"></i><i class="scroll-roller scroll-bottom" aria-hidden="true"></i></section>
             </aside>
           </div>
 
@@ -111,33 +114,33 @@
         </section>
 
         <section class="page" id="instances-page" data-page="instances" hidden>
-          <div class="page-heading"><div><span class="eyebrow">ВАШИ СБОРКИ</span><h1>Сборки<span>.</span></h1><p>Каждая сборка живёт в собственной папке с модами, мирами и настройками.</p></div><button class="button button-secondary" type="button" id="open-data-folder"><svg class="icon"><use href="#i-folder"/></svg>Папка сборок</button></div>
+          <div class="page-heading"><div><h1>Сборки<span>.</span></h1><p>Каждая сборка живёт в собственной папке с модами, мирами и настройками.</p></div><button class="button button-secondary" type="button" id="open-data-folder"><svg class="icon"><use href="#i-folder"/></svg>Папка сборок</button></div>
           <div class="instance-grid instance-grid-large" id="all-instance-grid"></div>
         </section>
 
         <section class="page" id="logs-page" data-page="logs" hidden>
-          <div class="page-heading"><div><span class="eyebrow">ДИАГНОСТИКА</span><h1>Журнал<span>.</span></h1><p>Здесь видны этапы установки, запуска и ошибки.</p></div><button class="button button-secondary" type="button" id="reload-logs"><svg class="icon"><use href="#i-refresh"/></svg>Обновить</button></div>
+          <div class="page-heading"><div><h1>Журнал<span>.</span></h1><p>Здесь видны этапы установки, запуска и ошибки.</p></div><button class="button button-secondary" type="button" id="reload-logs"><svg class="icon"><use href="#i-refresh"/></svg>Обновить</button></div>
           <div class="logs-card"><div class="logs-bar"><span class="logs-indicator"></span><span>launcher.log</span><small>Последние записи</small></div><pre id="logs-content">Загружаем журнал…</pre></div>
         </section>
 
         <section class="page" id="settings-page" data-page="settings" hidden>
-          <div class="page-heading"><div><span class="eyebrow">ПОД СЕБЯ</span><h1>Настройки<span>.</span></h1><p>Общие параметры. Для отдельной сборки можно задать свои Java и память.</p></div></div>
+          <div class="page-heading"><div><h1>Настройки<span>.</span></h1><p>Общие параметры. Для отдельной сборки можно задать свои Java и память.</p></div></div>
           <div class="settings-grid">
-            <section class="glass-card settings-card"><div class="section-title"><span class="section-icon"><svg class="icon"><use href="#i-user"/></svg></span><div><h3>Игрок</h3><p id="settings-account-status">Локальный профиль</p></div></div><label class="form-field"><span>Локальный никнейм</span><input id="player-name" type="text" maxlength="16" spellcheck="false" autocomplete="off" placeholder="Player" /><small>3–16 латинских букв, цифр или _. Ник можно быстро сменить в профиле.</small></label><button class="button button-secondary" type="button" id="settings-profile"><svg class="icon"><use href="#i-user"/></svg>Профиль и никнейм</button></section>
+            <section class="glass-card settings-card"><div class="section-title"><span class="section-icon"><svg class="icon"><use href="#i-user"/></svg></span><div><h3>Игрок</h3><p id="settings-account-status">Локальный профиль</p></div></div><label class="form-field"><span>Локальный никнейм</span><input id="player-name" type="text" maxlength="16" spellcheck="false" autocomplete="off" placeholder="Player" /><small id="settings-nickname-hint">3–16 латинских букв, цифр или _.</small></label><label class="toggle-row nickname-switch"><span><strong>Разрешить любые символы</strong><small>Кириллица, пробелы и эмодзи</small></span><input id="settings-any-symbols" type="checkbox" role="switch" /><i></i></label><button class="button button-secondary" type="button" id="settings-profile"><svg class="icon"><use href="#i-user"/></svg>Профиль и никнейм</button></section>
             <section class="glass-card settings-card"><div class="section-title"><span class="section-icon"><svg class="icon"><use href="#i-cpu"/></svg></span><div><h3>Память</h3><p>Значение по умолчанию для новых сборок</p></div></div><div class="memory-line"><input id="memory-range" type="range" min="1" max="16" step="1" /><label class="memory-number"><input id="memory-gb" type="number" min="1" max="16" step="1" /><span>ГБ</span></label></div><div class="memory-presets"><button type="button" data-memory="4">4 ГБ</button><button type="button" data-memory="6">6 ГБ</button><button type="button" data-memory="8">8 ГБ</button></div><small id="memory-limit-hint">Определяем доступную память…</small></section>
             <section class="glass-card settings-card java-card"><div class="section-title"><span class="section-icon"><svg class="icon"><use href="#i-coffee"/></svg></span><div><h3>Java без хлопот</h3><p>Veyra подберёт нужную версию для каждой сборки</p></div></div><div class="segmented"><button type="button" id="java-auto" class="is-active">Автоматически</button><button type="button" id="java-manual">Указать путь</button></div><p class="field-explain" id="java-explain">При необходимости лаунчер скачает официальную Java для выбранной версии Minecraft.</p><div class="manual-java" id="manual-java" hidden><input id="java-path" type="text" readonly placeholder="Путь к java.exe или javaw.exe" /><button class="button button-secondary" type="button" id="pick-java">Обзор</button></div><div class="java-detected"><strong>Найдено на компьютере</strong><div id="java-candidates"><span class="muted">Ищем Java…</span></div></div></section>
             <section class="glass-card settings-card"><div class="section-title"><span class="section-icon"><svg class="icon"><use href="#i-settings"/></svg></span><div><h3>Дополнительно</h3><p>Версии и папки</p></div></div><label class="toggle-row"><span><strong>Показывать Snapshots</strong><small>Экспериментальные версии Minecraft</small></span><input id="show-snapshots" type="checkbox" role="switch" /><i></i></label><button class="folder-link" type="button" id="settings-open-data"><svg class="icon"><use href="#i-folder"/></svg><span id="data-path">Папка сборок</span><svg class="icon"><use href="#i-arrow"/></svg></button></section>
 <section class="glass-card settings-card atmosphere-settings">
   <div class="section-title"><span class="section-icon"><svg class="icon"><use href="#i-spark"/></svg></span><div><h3>Атмосфера</h3><p>Свет, глубина и прозрачность — под ваше настроение</p></div></div>
   <div class="atmosphere-layout"><div class="atmosphere-preview" id="atmosphere-preview"><div class="atmosphere-landscape"></div><div class="atmosphere-window"><span class="preview-mark">v</span><span>veyra</span><i></i><strong>Ваше пространство</strong><small>Предпросмотр фона</small></div><div class="atmosphere-presets"><button type="button" data-atmosphere="solid">Монолит</button><button type="button" data-atmosphere="mist">Туман</button><button type="button" data-atmosphere="crystal">Кристалл</button></div></div>
-  <div class="atmosphere-controls"><label><span>Прозрачность <output id="appearance-transparency-value">0%</output></span><input id="appearance-transparency" type="range" min="0" max="60" step="1" /></label><label><span>Яркость фона <output id="appearance-brightness-value">100%</output></span><input id="appearance-brightness" type="range" min="30" max="150" step="1" /></label><label><span>Размытие фона <output id="appearance-blur-value">18 px</output></span><input id="appearance-blur" type="range" min="0" max="40" step="1" /></label><small>Изменения видны сразу. Сохраните настройки, чтобы оставить их. Прозрачность окна доступна в Windows 11.</small></div></div>
+  <div class="atmosphere-controls"><div class="segmented background-picture"><button type="button" data-background-picture="true">С картинкой</button><button type="button" data-background-picture="false">Без картинки</button></div><label><span>Прозрачность <output id="appearance-transparency-value">0%</output></span><input id="appearance-transparency" type="range" min="0" max="60" step="1" /></label><label><span>Яркость фона <output id="appearance-brightness-value">100%</output></span><input id="appearance-brightness" type="range" min="30" max="150" step="1" /></label><label><span>Размытие фона <output id="appearance-blur-value">18 px</output></span><input id="appearance-blur" type="range" min="0" max="40" step="1" /></label><small>Изменения видны сразу. Сохраните настройки, чтобы оставить их. Прозрачность окна доступна в Windows 11.</small></div></div>
 </section>
           </div>
           <div class="settings-actions"><button class="button button-primary" type="button" id="save-settings"><svg class="icon"><use href="#i-check"/></svg>Сохранить настройки</button></div>
         </section>
       </main>
 
-      <footer class="footerbar"><span class="footer-brand">veyra <b id="app-version">0.4.0</b></span><span class="footer-status"><i></i><span id="footer-message">Готовим лаунчер…</span></span><button class="stop-game-footer" id="stop-game-footer" type="button" hidden><svg class="icon"><use href="#i-stop"/></svg><span id="stop-game-footer-label">Остановить игру</span></button><span class="footer-right" id="footer-instance-count">0 сборок</span></footer>
+      <footer class="footerbar"><span class="footer-brand">veyra <b id="app-version">0.5.0</b></span><span class="footer-status"><i></i><span id="footer-message">Готовим лаунчер…</span></span><button class="stop-game-footer" id="stop-game-footer" type="button" hidden><svg class="icon"><use href="#i-stop"/></svg><span id="stop-game-footer-label">Остановить игру</span></button><button class="console-footer" id="console-footer" type="button" hidden><svg class="icon"><use href="#i-terminal"/></svg>Консоль установки</button><span class="footer-right" id="footer-instance-count">0 сборок</span></footer>
     </div>
   </div>
 
@@ -147,8 +150,8 @@
     <p class="profile-error" id="profile-feedback" role="alert" hidden></p>
     <div class="account-tabs" id="account-tabs" hidden><button class="is-selected" type="button" data-account-mode="local"><svg class="icon"><use href="#i-user"/></svg>Локальный</button><button type="button" data-account-mode="microsoft"><svg class="icon"><use href="#i-microsoft"/></svg>Microsoft</button></div>
     <div id="profile-local-panel">
-      <form id="profile-name-form"><label class="form-field"><span>Ваш ник в игре</span><div class="nickname-row"><input id="profile-name-input" type="text" minlength="3" maxlength="16" pattern="[A-Za-z0-9_]{3,16}" autocomplete="off" spellcheck="false" required aria-label="Локальный никнейм" /><button class="button button-primary" type="submit"><svg class="icon"><use href="#i-check"/></svg>Сохранить</button></div><small>Латинские буквы, цифры и _. Enter сохраняет ник для следующего запуска.</small></label></form>
-      <p class="profile-hint">Локальный профиль подходит для одиночной игры. При смене ника Minecraft создаёт другой локальный UUID.</p>
+      <form id="profile-name-form"><label class="form-field"><span>Ваш ник в игре</span><div class="nickname-row"><input id="profile-name-input" type="text" minlength="3" maxlength="16" pattern="[A-Za-z0-9_]{3,16}" autocomplete="off" spellcheck="false" required aria-label="Локальный никнейм" /><button class="button button-primary" type="submit"><svg class="icon"><use href="#i-check"/></svg>Сохранить</button></div><small id="profile-nickname-hint">Латинские буквы, цифры и _. Enter сохраняет ник.</small></label></form>
+      <label class="toggle-row nickname-switch"><span><strong>Разрешить любые символы</strong><small>Кириллица, пробелы и эмодзи</small></span><input id="profile-any-symbols" type="checkbox" role="switch" /><i></i></label><p class="profile-hint">Локальный профиль подходит для одиночной игры. При смене ника Minecraft создаёт другой локальный UUID.</p>
     </div>
     <div id="profile-microsoft-panel" hidden>
       <div class="microsoft-account" id="microsoft-signed" hidden><span class="account-badge"><svg class="icon"><use href="#i-check"/></svg>Minecraft Java</span><strong id="microsoft-name"></strong><small id="microsoft-uuid"></small><div class="profile-actions"><button class="button button-secondary" type="button" id="microsoft-name-change"><svg class="icon"><use href="#i-edit"/></svg>Сменить ник на сайте</button><button class="button button-secondary" type="button" id="microsoft-refresh"><svg class="icon"><use href="#i-refresh"/></svg>Обновить</button></div><p class="profile-hint">Ник связан с Minecraft-профилем. После изменения на minecraft.net нажмите «Обновить».</p></div>
@@ -161,19 +164,6 @@
     </div>
   </dialog>
 
-  <div class="launch-stage" id="launch-stage" hidden aria-live="polite">
-    <div class="launch-stage-image" id="launch-stage-image"></div>
-    <div class="launch-stage-shade"></div>
-    <button class="launch-stage-dismiss" type="button" id="launch-stage-dismiss" aria-label="Скрыть заставку"><svg class="icon"><use href="#i-close"/></svg></button>
-    <div class="launch-stage-center">
-      <div class="launch-mark"><span></span><img src="../assets/veyra-logo-256.png" alt="" /><span></span></div>
-      <span class="eyebrow">ГОТОВИМ ЗАПУСК</span>
-      <h2 id="launch-stage-name">Ваша сборка</h2>
-      <p id="launch-stage-message">Проверяем Java и файлы игры…</p>
-      <div class="launch-sequence" aria-hidden="true"><span>JAVA</span><i></i><span>СБОРКА</span><i></i><span>MINECRAFT</span></div>
-    </div>
-  </div>
-
 <div id="build-context-menu" class="context-menu" role="menu" aria-label="Действия со сборкой" hidden></div>
   <dialog id="create-dialog" class="modal creation-sheet" aria-labelledby="creation-title"><form id="create-form">
     <div class="modal-head"><span class="eyebrow">НОВАЯ СБОРКА</span><button type="button" class="modal-close" data-close="create-dialog" aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div>
@@ -181,9 +171,9 @@
     <label class="form-field"><span>01 / Название сборки</span><input id="create-name" type="text" minlength="2" maxlength="40" placeholder="Моя сборка" required /></label>
     <section class="version-picker"><div class="version-picker-head"><span>02 / Minecraft</span><strong id="chosen-version">Выберите версию</strong></div><div class="version-tools"><div class="segmented version-tabs"><button type="button" class="is-active" data-version-kind="release">Релизы</button><button type="button" data-version-kind="snapshot">Snapshots</button></div><label class="version-search"><svg class="icon"><use href="#i-search"/></svg><input id="version-search" type="search" placeholder="Найти версию…" aria-label="Поиск версии Minecraft" /></label></div><select id="create-version" hidden aria-label="Версия Minecraft"></select><div id="version-tiles" class="version-tiles" role="group" aria-label="Версии Minecraft"></div><button type="button" class="text-button version-more" id="version-more" hidden>Показать ещё версии <svg class="icon"><use href="#i-arrow"/></svg></button></section>
     <div class="form-field"><span>03 / Загрузчик</span><div class="loader-grid" id="loader-grid"><button class="loader-choice is-selected" type="button" data-loader="vanilla"><span class="loader-glyph"><img class="brand-icon" src="../assets/brands/minecraft.png" alt="" /></span><strong>Vanilla</strong><small>Чистая игра</small></button><button class="loader-choice" type="button" data-loader="fabric"><span class="loader-glyph"><img class="brand-icon" src="../assets/brands/fabric.png" alt="" /></span><strong>Fabric</strong><small>Лёгкие моды</small></button><button class="loader-choice" type="button" data-loader="neoforge"><span class="loader-glyph"><img class="brand-icon" src="../assets/brands/neoforge.png" alt="" /></span><strong>NeoForge</strong><small>Новые моды</small></button><button class="loader-choice" type="button" data-loader="forge"><span class="loader-glyph"><img class="brand-icon" src="../assets/brands/forge.png" alt="" /></span><strong>Forge</strong><small>Классика модов</small></button></div></div>
-    <label class="form-field" id="loader-version-field" hidden><span>Версия загрузчика</span><select id="create-loader-version"></select><small id="loader-version-hint">Получаем список версий…</small></label>
+    <section class="form-field" id="loader-version-field" hidden><span>Версия загрузчика</span><select id="create-loader-version" hidden></select><div class="loader-version-toolbar"><label class="version-search"><svg class="icon"><use href="#i-search"/></svg><input id="loader-version-search" type="search" placeholder="Найти версию загрузчика…" aria-label="Поиск версии загрузчика" /></label><strong id="chosen-loader-version"></strong></div><div class="version-tiles loader-version-tiles" id="loader-version-tiles" role="group" aria-label="Версии загрузчика"></div><button class="text-button" type="button" id="loader-version-more" hidden>Ещё версии <svg class="icon"><use href="#i-arrow"/></svg></button><small id="loader-version-hint">Получаем список версий…</small></section>
     <div class="creation-summary"><svg class="icon"><use href="#i-folder"/></svg><span>Своя папка, сохранения и моды. Java подберётся автоматически.</span></div>
-    <div class="modal-actions creation-actions"><button class="button button-secondary" type="button" data-close="create-dialog">Отмена</button><button class="button button-primary" type="submit" id="create-submit"><svg class="icon"><use href="#i-plus"/></svg>Создать и установить</button></div>
+    <div class="modal-actions creation-actions"><button class="button button-secondary" type="button" data-close="create-dialog">Отмена</button><button class="button button-primary" type="submit" id="create-submit"><span>Создать сборку</span><svg class="icon"><use href="#i-arrow"/></svg></button></div>
   </form></dialog>
 
   <dialog id="instance-dialog" class="modal">
@@ -208,7 +198,7 @@
 
   <dialog id="remove-dialog" class="modal modal-small"><div class="modal-head"><span class="eyebrow">ПОДТВЕРЖДЕНИЕ</span><button type="button" class="modal-close" data-close="remove-dialog" aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div><h2>Убрать сборку?</h2><p class="modal-intro">Сборка исчезнет из лаунчера. Её файлы переместятся в соседнюю папку <strong>trash</strong>, откуда их можно восстановить вручную.</p><div class="modal-actions"><button class="button button-secondary" type="button" data-close="remove-dialog">Отмена</button><button class="button button-danger" type="button" id="confirm-remove"><svg class="icon"><use href="#i-trash"/></svg>Убрать сборку</button></div></dialog>
 
-  <div class="toast" id="toast" role="status" hidden><svg class="icon"><use href="#i-check"/></svg><span id="toast-text"></span></div>
+  <div class="toast" id="toast" role="status" hidden><svg class="icon"><use href="#i-check"/></svg><span id="toast-text"></span><button type="button" id="toast-undo" hidden>Отменить</button></div>
   <script src="./renderer.js"></script>
 </body>
 </html>
