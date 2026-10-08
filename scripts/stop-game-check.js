@@ -43,12 +43,21 @@ async function main() {
     await page.evaluate(() => { window.__stopCrashes = 0; window.launcher.onEvent((event) => {
       if (event.type === 'game-crash') window.__stopCrashes++;
     }); });
+    let previousPlaytime = 0;
     for (const control of ['footer', 'hero']) {
       await page.locator('#main-action').click();
       await page.waitForFunction(() => document.getElementById('launch-stage').hidden);
       await page.waitForFunction(() => document.getElementById('main-action-label').textContent === 'Остановить игру');
       const pid = await app.evaluate(() => globalThis.__stopCheckPid);
       assert.ok(pid > 0);
+      await page.waitForTimeout(control === 'footer' ? 15500 : 2200);
+      if (control === 'footer') {
+        const checkpoint = await page.evaluate(() => window.launcher.getState());
+        assert.ok(checkpoint.instances[0].playedMs >= 15000, 'Checkpoint must save during a running session');
+        assert.ok(checkpoint.runningSession.accountedAt > checkpoint.runningSession.startedAt);
+        assert.ok(JSON.parse(fs.readFileSync(path.join(dataDirectory, 'settings.json'), 'utf8')).instances[0].playedMs >= 15000);
+      }
+      assert.match(await page.locator('#capsule-session').textContent(), /Сейчас в игре/);
       if (control === 'footer') {
         await page.locator('.rail-button[data-view="settings"]').click();
         await page.locator('#stop-game-footer').click();
@@ -57,6 +66,8 @@ async function main() {
       const after = await page.evaluate(() => window.launcher.getState());
       assert.equal(after.runningInstanceId, null);
       assert.equal(after.lastCrash, null);
+      assert.ok(after.instances[0].playedMs >= previousPlaytime + 2000, 'Playtime must accumulate between launches');
+      previousPlaytime = after.instances[0].playedMs;
       assert.equal(await app.evaluate((_context, targetPid) => {
         try { process.kill(targetPid, 0); return false; } catch { return true; }
       }, pid), true, 'Child process still exists');
@@ -64,6 +75,11 @@ async function main() {
       await page.waitForFunction(() => document.getElementById('main-action-label').textContent === 'Играть');
     }
     assert.equal(await page.evaluate(() => window.__stopCrashes), 0);
+    await page.reload();
+    await page.locator('#capsule-playtime').waitFor();
+    assert.equal((await page.evaluate(() => window.launcher.getState())).instances[0].playedMs, previousPlaytime);
+    await page.waitForTimeout(300);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dataDirectory, 'settings.json'), 'utf8')).instances[0].playedMs, previousPlaytime);
     process.stdout.write('OK: both stop buttons terminate a real child, restore Play, allow relaunch and emit no crash. Game replaced with an idle process.\n');
   } finally {
     const page = await app.firstWindow().catch(() => null);

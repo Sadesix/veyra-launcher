@@ -19,8 +19,8 @@
   const friendlyError = (error) => error && error.message ? error.message : String(error || 'Неизвестная ошибка');
   const instances = () => state.data?.instances || [];
   const selected = () => instances().find((item) => item.id === state.data?.settings.selectedInstanceId) || instances()[0] || null;
-  const setText = (id, value) => { el(id).textContent = String(value); };
-  const countText = (n) => n + ' ' + (n % 10 === 1 && n % 100 !== 11 ? 'экземпляр' : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'экземпляра' : 'экземпляров'));
+  const setText = (id, value) => { if (el(id).textContent !== String(value)) el(id).textContent = String(value); };
+  const countText = (n) => n + ' ' + (n % 10 === 1 && n % 100 !== 11 ? 'сборка' : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'сборки' : 'сборок'));
   const memoryMaximum = () => Math.max(1, Number(state.data?.maxMemoryGb) || 16);
 
   function notice(message, crash = false) {
@@ -39,6 +39,9 @@
     catch (error) { notice(friendlyError(error)); return null; }
   }
   function showView(view) {
+    hideContextMenu();
+    if (state.view !== view) document.querySelector('.content').scrollTop = 0;
+    if (state.view === 'settings' && view !== 'settings') applyAppearance(state.data.settings.appearance);
     state.view = view;
     for (const page of document.querySelectorAll('[data-page]')) {
       const active = page.dataset.page === view;
@@ -51,7 +54,7 @@
     const navButtons = [...document.querySelectorAll('.rail-nav .rail-button')];
     const currentButton = navButtons.find((button) => button.dataset.view === view);
     el('rail-nav').style.setProperty('--nav-y', (currentButton?.offsetTop || 0) + 'px');
-    setText('view-title', { home: 'Главная', instances: 'Экземпляры', logs: 'Журнал', settings: 'Настройки' }[view]);
+    setText('view-title', { home: 'Главная', instances: 'Сборки', logs: 'Журнал', settings: 'Настройки' }[view]);
     el('search-input').closest('.search-box').hidden = view !== 'home' && view !== 'instances';
     if (view === 'logs') refreshLogs();
     if (view === 'settings') renderSettings();
@@ -71,7 +74,7 @@
     marker.className = 'add-icon';
     marker.append(icon('plus'));
     const title = document.createElement('strong');
-    title.textContent = 'Новый экземпляр';
+    title.textContent = 'Новая сборка';
     const hint = document.createElement('small');
     hint.textContent = 'Отдельная папка для новой игры';
     button.append(marker, title, hint);
@@ -84,6 +87,7 @@
     button.className = 'instance-card accent-' + instance.accent + (instance.installed ? ' is-installed' : '') +
       (selected()?.id === instance.id ? ' is-selected' : '');
     button.setAttribute('aria-label', 'Выбрать ' + instance.name);
+    button.dataset.instanceId = instance.id;
     const art = document.createElement('span');
     art.className = 'instance-art';
     if (instance.coverUrl) art.style.backgroundImage = 'url("' + instance.coverUrl + '")';
@@ -123,28 +127,38 @@
       await action(() => api.selectInstance(instance.id));
       showView('home');
     });
+    button.addEventListener('contextmenu', (event) => openContextMenu(event, instance.id));
     return button;
   }
   function renderCards() {
     const items = filteredInstances();
-    const key = JSON.stringify([items, state.data.settings.selectedInstanceId]);
-    if (state.cardsKey === key) return;
-    state.cardsKey = key;
     for (const [id, limit] of [['home-instance-grid', 4], ['all-instance-grid', Infinity]]) {
       const grid = el(id);
-      grid.replaceChildren();
+      const current = new Map([...grid.querySelectorAll('[data-instance-id]')].map(card => [card.dataset.instanceId, card]));
+      const ordered = [];
       for (const [index, instance] of items.slice(0, limit).entries()) {
-        const card = instanceCard(instance);
+        const signature = JSON.stringify([instance.name, instance.accent, instance.coverUrl, instance.favorite, instance.installed, instance.loader, instance.minecraftVersion]);
+        let card = current.get(instance.id);
+        if (!card || card.dataset.signature !== signature) {
+          const replacement = instanceCard(instance);
+          replacement.dataset.signature = signature;
+          if (card) { replacement.style.animation = 'none'; card.replaceWith(replacement); }
+          card = replacement;
+        }
+        card.classList.toggle('is-selected', selected()?.id === instance.id);
         card.style.setProperty('--order', Math.min(index, 7));
-        grid.append(card);
+        ordered.push(card);
       }
-      grid.append(addCard());
+      ordered.push(grid.querySelector('.add-card') || addCard());
+      for (const card of [...grid.children]) if (!ordered.includes(card)) card.remove();
+      ordered.forEach((card, index) => { if (grid.children[index] !== card) grid.insertBefore(card, grid.children[index] || null); });
     }
     setText('home-count', countText(instances().length));
     setText('footer-instance-count', countText(instances().length));
   }
   function renderHero() {
     const item = selected();
+    transitionHero(item);
     el('hero-empty').hidden = Boolean(item);
     el('hero-active').hidden = !item;
     if (!item) {
@@ -153,13 +167,16 @@
       for (const id of ['detail-loader', 'detail-version', 'detail-folder', 'capsule-last']) setText(id, '—');
       setText('detail-java', 'Автоматически');
       setText('detail-memory', (state.data?.settings.memoryGb || 4) + ' ГБ');
-      setText('capsule-note', 'Создайте экземпляр и оставьте первую заметку к сборке.');
+      setText('capsule-note', 'Создайте сборку и оставьте первую заметку к сборке.');
       setText('capsule-launches', '0');
+      renderPlaytime();
       return;
     }
     const hero = el('hero-card');
-    hero.classList.remove('accent-violet', 'accent-blue', 'accent-rose', 'accent-amber');
-    hero.classList.add('accent-' + item.accent);
+    if (!hero.classList.contains('accent-' + item.accent)) {
+      hero.classList.remove('accent-violet', 'accent-blue', 'accent-rose', 'accent-amber');
+      hero.classList.add('accent-' + item.accent);
+    }
     el('hero-image').style.backgroundImage = item.coverUrl ? 'url("' + item.coverUrl + '")' : '';
     el('hero-favorite').hidden = !item.favorite;
     setText('hero-name', item.name);
@@ -167,8 +184,8 @@
     el('hero-loader').querySelector('span').textContent = loaderNames[item.loader] || item.loader;
     el('hero-version').querySelector('span').textContent = 'Minecraft ' + item.minecraftVersion;
     setText('hero-description', item.installed
-      ? 'Сборка готова. Моды, сохранения и настройки останутся внутри этого экземпляра.'
-      : 'Экземпляр создан. Установите игру, чтобы начать.');
+      ? 'Сборка готова. Моды, сохранения и настройки останутся внутри этой сборки.'
+      : 'Сборка создана. Установите игру, чтобы начать.');
     setText('detail-loader', loaderNames[item.loader] || item.loader);
     setText('detail-version', item.minecraftVersion);
     setText('detail-java', item.javaPath || state.data.settings.javaPath ? 'Своя Java' : 'Автоматически');
@@ -176,6 +193,7 @@
     setText('detail-folder', item.legacy ? 'Старая папка' : 'Своя папка');
     el('detail-folder').title = item.directory;
     setText('capsule-note', item.note || 'Оставьте здесь цель или напоминание для этой сборки.');
+    el('capsule-note').title = item.note || '';
     setText('capsule-launches', item.launchCount || 0);
     setText('capsule-last', item.lastPlayedAt
       ? new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' }).format(new Date(item.lastPlayedAt))
@@ -195,6 +213,7 @@
     box.hidden = !working;
     el('cancel-operation').disabled = false;
     if (working) renderProgress(operation.progress || null);
+    renderPlaytime();
   }
   function renderProgress(value) {
     if (!value) {
@@ -231,6 +250,8 @@
     renderJavaCandidates();
     setText('data-path', state.data.instancesDirectory);
     el('data-path').title = state.data.instancesDirectory;
+    state.appearanceDraft = { ...settings.appearance };
+    renderAppearance();
   }
   function renderJavaMode() {
     const automatic = state.javaMode === 'auto';
@@ -239,7 +260,7 @@
     el('manual-java').hidden = automatic;
     setText('java-explain', automatic
       ? 'Veyra подберёт нужную Java и при необходимости загрузит официальную сборку.'
-      : 'Выбранная Java должна соответствовать версии Minecraft. Для разных экземпляров можно указать отдельный путь.');
+      : 'Выбранная Java должна соответствовать версии Minecraft. Для разных сборок можно указать отдельный путь.');
   }
   function renderJavaCandidates() {
     const target = el('java-candidates');
@@ -263,6 +284,8 @@
   function render() {
     if (!state.data) return;
     renderProfile();
+    renderGreeting();
+    if (state.view !== 'settings') applyAppearance(state.data.settings.appearance, false);
     const running = instances().find((item) => item.id === state.data.runningInstanceId);
     el('stop-game-footer').hidden = !running;
     el('stop-game-footer').disabled = Boolean(state.data.stoppingGame);
@@ -271,6 +294,11 @@
     renderHero();
     renderCards();
     setText('app-version', state.data.appVersion);
+    if (el('create-dialog').open && state.versionsKey !== JSON.stringify(state.data.versions)) {
+      state.versionsKey = JSON.stringify(state.data.versions);
+      renderVersionOptions();
+      refreshLoaderOptions();
+    }
   }
   function renderProfile() {
     const account = state.data.account;
@@ -311,7 +339,7 @@
     el('profile-name-input').value = state.data.settings.playerName;
     el('profile-feedback').hidden = true;
     renderProfile();
-    el('profile-dialog').showModal();
+    showDialog(el('profile-dialog'));
     if (state.profileTab === 'local') {
       el('profile-name-input').focus();
       el('profile-name-input').select();
@@ -339,13 +367,199 @@
       const option = new Option('Не удалось получить версии', '');
       select.add(option);
       el('create-submit').disabled = true;
+      renderVersionTiles();
       return;
     }
     for (const version of versions) {
       select.add(new Option(version.id + (version.type === 'snapshot' ? ' · Snapshot' : ''), version.id));
     }
-    select.value = versions.some((item) => item.id === previous) ? previous : versions[0].id;
-    el('create-submit').disabled = false;
+    const preferred = versions.filter(item => item.type === (state.versionKind || 'release'));
+    select.value = preferred.some(item => item.id === previous) ? previous : preferred[0]?.id || '';
+    el('create-submit').disabled = !select.value;
+    renderVersionTiles();
+  }
+  function renderVersionTiles() {
+    const query = el('version-search').value.trim().toLowerCase();
+    const kind = state.versionKind || 'release';
+    const versions = availableVersions().filter(item => item.type === kind && (!query || item.id.toLowerCase().includes(query)));
+    const target = el('version-tiles');
+    target.replaceChildren();
+    for (const [index, version] of versions.slice(0, state.versionLimit || 24).entries()) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'version-tile';
+      button.dataset.version = version.id;
+      button.classList.toggle('is-selected', el('create-version').value === version.id);
+      button.setAttribute('aria-pressed', String(el('create-version').value === version.id));
+      const title = document.createElement('strong');
+      title.textContent = version.id;
+      const subtitle = document.createElement('small');
+      subtitle.textContent = index === 0 && !query ? (kind === 'snapshot' ? 'Свежий Snapshot' : 'Последняя версия') : (kind === 'snapshot' ? 'Snapshot' : 'Релиз');
+      button.append(icon('check'), title, subtitle);
+      button.addEventListener('click', () => {
+        el('create-version').value = version.id;
+        for (const tile of target.children) {
+          tile.classList.toggle('is-selected', tile === button);
+          tile.setAttribute('aria-pressed', String(tile === button));
+        }
+        setText('chosen-version', version.id);
+        refreshLoaderOptions();
+      });
+      target.append(button);
+    }
+    if (!versions.length) {
+      const hint = document.createElement('p');
+      hint.className = 'version-empty';
+      hint.textContent = state.data.versions.length ? 'Версия не найдена. Попробуйте другой запрос.' : 'Загружаем каталог Minecraft…';
+      target.append(hint);
+    }
+    el('version-more').hidden = versions.length <= (state.versionLimit || 24);
+    setText('chosen-version', el('create-version').value || 'Выберите версию');
+    for (const button of document.querySelectorAll('[data-version-kind]')) {
+      button.classList.toggle('is-active', button.dataset.versionKind === kind);
+      button.setAttribute('aria-pressed', String(button.dataset.versionKind === kind));
+    }
+  }
+  function renderGreeting() {
+    if (!state.data) return;
+    const hour = new Date().getHours();
+    setText('greeting-time', hour < 6 ? 'Доброй ночи' : hour < 12 ? 'Доброе утро' : hour < 18 ? 'Добрый день' : 'Добрый вечер');
+    setText('greeting-name', state.data.account.name);
+  }
+  function duration(ms, live = false) {
+    const seconds = Math.floor(Math.max(0, ms) / 1000);
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor(seconds / 60) % 60;
+    if (live && hours === 0 && minutes === 0) return seconds + ' сек';
+    return hours ? hours + ' ч ' + minutes + ' мин' : Math.floor(seconds / 60) + ' мин';
+  }
+  function renderPlaytime() {
+    const item = selected();
+    const session = state.data?.runningSession;
+    const running = session?.instanceId === item?.id && Boolean(item);
+    const total = (item?.playedMs || 0) + (running ? Math.max(0, Date.now() - session.accountedAt) : 0);
+    setText('capsule-playtime', duration(total, running || total < 60000 && total > 0));
+    setText('capsule-session', running ? 'Сейчас в игре · ' + duration(Date.now() - session.startedAt, true) : total ? 'Время вашей истории' : 'Впереди первая игра');
+    el('capsule-session').classList.toggle('is-playing', running);
+  }
+  function transitionHero(item) {
+    const key = item ? item.id + '|' + (item.coverUrl || '') : '';
+    const hero = el('hero-card');
+    if (state.heroKey === key) return;
+    const previous = state.heroKey;
+    state.heroKey = key;
+    hero.dataset.instanceId = item?.id || '';
+    hero.querySelectorAll('.hero-outgoing').forEach(node => node.remove());
+    for (const node of [el('hero-image'), el('hero-active')]) node.getAnimations().forEach(animation => animation.cancel());
+    if (previous === undefined || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const image = el('hero-image').cloneNode(true);
+    const content = (previous ? el('hero-active') : el('hero-empty')).cloneNode(true);
+    for (const node of [image, content]) {
+      node.removeAttribute('id');
+      node.querySelectorAll('[id]').forEach(child => child.removeAttribute('id'));
+      node.classList.add('hero-outgoing');
+      node.inert = true;
+      node.setAttribute('aria-hidden', 'true');
+      hero.append(node);
+    }
+    content.hidden = false;
+    image.style.zIndex = '1';
+    content.style.zIndex = '4';
+    const timing = { duration: 680, easing: 'cubic-bezier(.22,1,.36,1)' };
+    image.animate([{ opacity: 1, transform: 'scale(1)' }, { opacity: 0, transform: 'scale(1.06)' }], timing).finished.catch(() => {}).finally(() => image.remove());
+    content.animate([{ opacity: 1, transform: 'translateY(0)', filter: 'blur(0)' }, { opacity: 0, transform: 'translateY(-18px)', filter: 'blur(7px)' }], { ...timing, duration: 420 }).finished.catch(() => {}).finally(() => content.remove());
+    el('hero-image').animate([{ opacity: .3, scale: 1.055 }, { opacity: 1, scale: 1 }], timing);
+    const incoming = item ? el('hero-active') : el('hero-empty');
+    incoming.classList.add('has-switched');
+    incoming.animate([{ opacity: 0, transform: 'translateY(20px)', filter: 'blur(6px)' }, { opacity: 1, transform: 'translateY(0)', filter: 'blur(0)' }], { ...timing, duration: 600 });
+  }
+  function showDialog(dialog) {
+    clearTimeout(dialog.closeTimer);
+    dialog.classList.remove('is-closing');
+    if (!dialog.open) dialog.showModal();
+  }
+  function closeDialog(dialog) {
+    if (!dialog.open || dialog.classList.contains('is-closing')) return;
+    dialog.classList.add('is-closing');
+    if (dialog.id === 'create-dialog') state.loaderRequest++;
+    dialog.closeTimer = setTimeout(() => { dialog.close(); dialog.classList.remove('is-closing'); }, window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 260);
+  }
+  const atmospherePresets = { solid: { transparency: 0, brightness: 100, blur: 18 }, mist: { transparency: 18, brightness: 80, blur: 28 }, crystal: { transparency: 40, brightness: 110, blur: 8 } };
+  function applyAppearance(value, native = true) {
+    if (!value) return;
+    const root = document.documentElement;
+    root.style.setProperty('--background-alpha', 1 - value.transparency / 100);
+    root.style.setProperty('--background-brightness', value.brightness / 100);
+    root.style.setProperty('--background-blur', value.blur + 'px');
+    if (native) {
+      clearTimeout(state.appearanceTimer);
+      state.appearanceTimer = setTimeout(() => api.previewAppearance(value).catch(() => {}), 120);
+    }
+  }
+  function renderAppearance() {
+    const value = state.appearanceDraft;
+    if (!value) return;
+    applyAppearance(value);
+    for (const key of ['transparency', 'brightness', 'blur']) {
+      el('appearance-' + key).value = value[key];
+      setText('appearance-' + key + '-value', value[key] + (key === 'blur' ? ' px' : '%'));
+    }
+    const preview = el('atmosphere-preview');
+    preview.style.setProperty('--preview-alpha', 1 - value.transparency / 100);
+    preview.style.setProperty('--preview-light', value.brightness / 100);
+    preview.style.setProperty('--preview-blur', value.blur / 4 + 'px');
+    for (const button of document.querySelectorAll('[data-atmosphere]')) {
+      const preset = atmospherePresets[button.dataset.atmosphere];
+      const active = Object.keys(preset).every(key => preset[key] === value[key]);
+      button.classList.toggle('is-selected', active);
+      button.setAttribute('aria-pressed', String(active));
+    }
+  }
+  function hideContextMenu() { el('build-context-menu').hidden = true; }
+  function openContextMenu(event, id) {
+    event.preventDefault();
+    if (document.querySelector('dialog[open]')) return;
+    const item = instances().find(entry => entry.id === id);
+    const menu = el('build-context-menu');
+    menu.replaceChildren();
+    const heading = document.createElement('p');
+    heading.className = 'context-heading';
+    heading.textContent = item?.name || 'Библиотека';
+    menu.append(heading);
+    const entries = item ? [
+      [state.data.runningInstanceId === id ? 'stop' : item.installed ? 'play' : 'download', state.data.runningInstanceId === id ? 'Остановить игру' : item.installed ? 'Играть' : 'Установить', async () => {
+        await api.selectInstance(id); showView('home');
+        if (state.data.runningInstanceId === id) await api.stopGame();
+        else if (item.installed) await launchWithScene(item); else await api.installInstance(id);
+      }, Boolean(state.data.operation || state.data.stoppingGame || state.data.runningInstanceId && state.data.runningInstanceId !== id)],
+      ['edit', 'Переименовать', async () => { await api.selectInstance(id); showView('home'); openQuickRename(); }],
+      ['image', 'Сменить обложку', () => api.setInstanceCover(id), Boolean(item.legacy)],
+      ['star', item.favorite ? 'Убрать из избранного' : 'В избранное', () => api.updateInstance(id, { favorite: !item.favorite })],
+      ['folder', 'Открыть папку', () => api.openInstanceFolder(id)],
+      ['settings', 'Настройки сборки', () => openEdit(item)],
+      ['trash', 'Удалить сборку', () => { state.removingId = id; showDialog(el('remove-dialog')); }, Boolean(state.data.operation?.instanceId === id || state.data.runningInstanceId === id)],
+    ] : [['plus', 'Новая сборка', openCreate], ['folder', 'Папка сборок', () => api.openDataFolder()]];
+    for (const [glyph, label, callback, disabled] of entries) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.setAttribute('role', 'menuitem');
+      button.disabled = Boolean(disabled);
+      button.dataset.action = glyph;
+      if (glyph === 'trash') button.className = 'context-danger';
+      const text = document.createElement('span'); text.textContent = label;
+      button.append(icon(glyph), text);
+      button.addEventListener('click', () => { hideContextMenu(); action(callback); });
+      menu.append(button);
+    }
+    menu.hidden = false;
+    const box = menu.getBoundingClientRect();
+    const anchor = event.currentTarget?.getBoundingClientRect();
+    const x = event.clientX || anchor?.left || 100;
+    const y = event.clientY || anchor?.bottom || 100;
+    menu.style.left = Math.max(8, Math.min(x, window.innerWidth - box.width - 8)) + 'px';
+    menu.style.top = Math.max(8, Math.min(y, window.innerHeight - box.height - 8)) + 'px';
+    menu.querySelector('button:not(:disabled)')?.focus();
+    state.contextAnchor = event.currentTarget;
   }
   async function refreshLoaderOptions() {
     const token = ++state.loaderRequest;
@@ -380,10 +594,13 @@
     state.loaderRequest++;
     el('create-form').reset();
     state.loader = 'vanilla';
+    state.versionKind = 'release';
+    state.versionLimit = 24;
+    el('version-search').value = '';
     for (const button of document.querySelectorAll('[data-loader]')) button.classList.toggle('is-selected', button.dataset.loader === 'vanilla');
     renderVersionOptions();
     el('loader-version-field').hidden = true;
-    el('create-dialog').showModal();
+    showDialog(el('create-dialog'));
     el('create-name').focus();
   }
   function openEdit(item) {
@@ -406,7 +623,7 @@
     renderCoverPreview(item);
     setText('edit-directory', item.directory);
     el('edit-directory').title = item.directory;
-    el('instance-dialog').showModal();
+    showDialog(el('instance-dialog'));
   }
   function renderCoverPreview(item) {
     el('cover-preview').style.backgroundImage = item?.coverUrl ? 'url("' + item.coverUrl + '")' : '';
@@ -498,7 +715,67 @@
     }
     for (const id of ['create-top', 'create-empty']) el(id).addEventListener('click', openCreate);
     for (const button of document.querySelectorAll('[data-close]')) {
-      button.addEventListener('click', () => el(button.dataset.close).close());
+      button.addEventListener('click', () => closeDialog(el(button.dataset.close)));
+    }
+    for (const dialog of document.querySelectorAll('dialog')) {
+      dialog.addEventListener('cancel', (event) => { event.preventDefault(); closeDialog(dialog); });
+      let outsideDown = false;
+      const outside = (event) => {
+        const box = dialog.getBoundingClientRect();
+        return event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
+      };
+      dialog.addEventListener('pointerdown', event => { outsideDown = event.target === dialog && outside(event); });
+      dialog.addEventListener('click', event => { if (outsideDown && outside(event)) closeDialog(dialog); outsideDown = false; });
+    }
+    for (const id of ['hero-card', 'home-instance-grid', 'all-instance-grid']) {
+      el(id).addEventListener('contextmenu', event => {
+        if (event.target.closest('[data-instance-id]') && id !== 'hero-card' || event.target.closest('input, textarea')) return;
+        openContextMenu(event, id === 'hero-card' ? selected()?.id : null);
+      });
+    }
+    document.addEventListener('pointerdown', event => {
+      if (!event.target.closest('#build-context-menu')) hideContextMenu();
+    });
+    document.querySelector('.content').addEventListener('scroll', hideContextMenu);
+    window.addEventListener('resize', hideContextMenu);
+    el('build-context-menu').addEventListener('keydown', event => {
+      const buttons = [...el('build-context-menu').querySelectorAll('button:not(:disabled)')];
+      const index = buttons.indexOf(document.activeElement);
+      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault();
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+        buttons[next]?.focus();
+      } else if (event.key === 'Escape' || event.key === 'Tab') {
+        event.preventDefault(); hideContextMenu(); state.contextAnchor?.focus();
+      }
+    });
+    for (const key of ['transparency', 'brightness', 'blur']) {
+      el('appearance-' + key).addEventListener('input', event => { state.appearanceDraft[key] = Number(event.target.value); renderAppearance(); });
+    }
+    for (const button of document.querySelectorAll('[data-atmosphere]')) {
+      button.addEventListener('click', () => { state.appearanceDraft = { ...atmospherePresets[button.dataset.atmosphere] }; renderAppearance(); });
+    }
+    el('version-search').addEventListener('input', () => { state.versionLimit = 24; renderVersionTiles(); });
+    el('version-search').addEventListener('keydown', event => {
+      if (event.key === 'Enter') { event.preventDefault(); el('version-tiles').querySelector('button')?.click(); }
+    });
+    el('version-more').addEventListener('click', () => { state.versionLimit += 24; renderVersionTiles(); });
+    for (const button of document.querySelectorAll('[data-version-kind]')) {
+      button.addEventListener('click', async () => {
+        state.versionKind = button.dataset.versionKind;
+        state.versionLimit = 24;
+        el('version-search').value = '';
+        if (state.versionKind === 'snapshot' && !state.data.settings.showSnapshots) {
+          const saved = await action(() => api.saveSettings({ showSnapshots: true }));
+          if (!saved) return;
+        }
+        renderVersionOptions();
+        if (!availableVersions().some(item => item.id === el('create-version').value && item.type === state.versionKind)) {
+          el('create-version').value = availableVersions().find(item => item.type === state.versionKind)?.id || '';
+          renderVersionTiles();
+        }
+        refreshLoaderOptions();
+      });
     }
     el('search-input').addEventListener('input', renderCards);
     document.addEventListener('keydown', (event) => {
@@ -536,7 +813,7 @@
       if (saved) {
         await profileAction(() => api.selectAccount('local'));
         el('player-name').value = state.data.settings.playerName;
-        el('profile-dialog').close();
+        closeDialog(el('profile-dialog'));
         toast('Ник сохранён: ' + state.data.settings.playerName);
       }
     });
@@ -624,7 +901,7 @@
         refreshLoaderOptions();
       });
     }
-    el('create-version').addEventListener('change', refreshLoaderOptions);
+    el('create-version').addEventListener('change', () => { renderVersionTiles(); refreshLoaderOptions(); });
     el('create-form').addEventListener('submit', async (event) => {
       event.preventDefault();
       if (state.busy) return;
@@ -639,7 +916,7 @@
       const result = await action(() => api.createInstance(input));
       state.busy = false;
       if (result) {
-        el('create-dialog').close();
+        closeDialog(el('create-dialog'));
         showView('home');
         action(() => api.installInstance(result.id));
       } else el('create-submit').disabled = false;
@@ -687,17 +964,17 @@
         accent: state.editAccent,
         favorite: el('edit-favorite').checked,
       }));
-      if (updated) { el('instance-dialog').close(); toast('Настройки экземпляра сохранены'); }
+      if (updated) { closeDialog(el('instance-dialog')); toast('Настройки сборки сохранены'); }
     });
     el('edit-open-folder').addEventListener('click', () => action(() => api.openInstanceFolder(state.editingId)));
     el('remove-instance').addEventListener('click', () => {
       state.removingId = state.editingId;
       el('instance-dialog').close();
-      el('remove-dialog').showModal();
+      showDialog(el('remove-dialog'));
     });
     el('confirm-remove').addEventListener('click', async () => {
       const removed = await action(() => api.removeInstance(state.removingId));
-      if (removed) { el('remove-dialog').close(); toast('Экземпляр убран из библиотеки'); }
+      if (removed) { closeDialog(el('remove-dialog')); toast('Сборка убрана из библиотеки'); }
     });
     el('java-auto').addEventListener('click', () => { state.javaMode = 'auto'; renderJavaMode(); });
     el('java-manual').addEventListener('click', () => { state.javaMode = 'manual'; renderJavaMode(); });
@@ -721,6 +998,7 @@
         memoryGb: Number(el('memory-gb').value),
         javaPath: state.javaMode === 'auto' ? '' : el('java-path').value,
         showSnapshots: el('show-snapshots').checked,
+        appearance: state.appearanceDraft,
       }));
       if (saved) { renderSettings(); renderVersionOptions(); toast('Настройки сохранены'); }
     });
@@ -738,6 +1016,7 @@
     showView('home');
     if (!data.versions.length) await action(() => api.refreshVersions());
     action(() => api.scanJava());
+    setInterval(() => { renderGreeting(); renderPlaytime(); }, 1000);
   }
   initialize();
 })();

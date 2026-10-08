@@ -12,6 +12,7 @@ const { MicrosoftAuth, validClientId } = require('./microsoft-auth');
 const { AccountVault } = require('./account-vault');
 const { diagnoseFailure } = require('./game-diagnostics');
 const { prechecks, javaArguments } = require('./launch-runtime');
+const { appearance } = require('./appearance');
 const microsoftConfig = require('./microsoft-config.json');
 
 if (process.env.VEYRA_TEST_DATA_DIR) app.setPath('userData', path.resolve(process.env.VEYRA_TEST_DATA_DIR));
@@ -91,6 +92,7 @@ function defaultSettings() {
     showSnapshots: false,
     selectedInstanceId: '',
     instances: [],
+    appearance: appearance(),
   };
 }
 
@@ -138,6 +140,7 @@ function sanitizeInstance(raw) {
     createdAt: raw.createdAt || new Date().toISOString(),
     lastPlayedAt: typeof raw.lastPlayedAt === 'string' ? raw.lastPlayedAt : '',
     launchCount: Number.isSafeInteger(raw.launchCount) && raw.launchCount >= 0 ? raw.launchCount : 0,
+    playedMs: Number.isSafeInteger(raw.playedMs) && raw.playedMs >= 0 ? raw.playedMs : 0,
     note: typeof raw.note === 'string' ? raw.note.slice(0, 180) : '',
     favorite: Boolean(raw.favorite),
     accent: ['violet', 'blue', 'rose', 'amber'].includes(raw.accent) ? raw.accent : 'violet',
@@ -180,6 +183,7 @@ async function loadState() {
   if (Number.isInteger(saved.memoryGb) && saved.memoryGb >= 1) settings.memoryGb = Math.min(saved.memoryGb, maxMemoryGb());
   if (typeof saved.javaPath === 'string' && (!saved.javaPath || path.isAbsolute(saved.javaPath))) settings.javaPath = saved.javaPath;
   settings.showSnapshots = Boolean(saved.showSnapshots);
+  settings.appearance = appearance(saved.appearance);
   if (Array.isArray(saved.instances)) {
     settings.instances = saved.instances.map(sanitizeInstance).filter(Boolean);
     settings.selectedInstanceId = typeof saved.selectedInstanceId === 'string' ? saved.selectedInstanceId : '';
@@ -213,7 +217,7 @@ function selectedInstance() {
 
 function requireInstance(id) {
   const instance = settings.instances.find((item) => item.id === id);
-  if (!instance) throw new Error('Экземпляр не найден');
+  if (!instance) throw new Error('Сборка не найдена');
   return instance;
 }
 
@@ -232,6 +236,7 @@ function publicState() {
       javaPath: settings.javaPath,
       showSnapshots: settings.showSnapshots,
       selectedInstanceId: settings.selectedInstanceId,
+      appearance: { ...settings.appearance },
     },
     instances: settings.instances.map((instance) => ({
       ...instance,
@@ -246,6 +251,7 @@ function publicState() {
     } : null,
     runningInstanceId: gameProcess?.instanceId || null,
     stoppingGame: Boolean(gameProcess?.stopping),
+    runningSession: gameProcess ? { instanceId: gameProcess.instanceId, accountedAt: gameProcess.accountedAt, startedAt: gameProcess.startedAt } : null,
     appVersion: app.getVersion(),
     systemMemoryGb: systemMemoryGb(),
     maxMemoryGb: maxMemoryGb(),
@@ -507,7 +513,7 @@ async function createInstance(input) {
   settings.selectedInstanceId = id;
   await persist();
   emitState();
-  status('Экземпляр «' + instance.name + '» создан', 'success');
+  status('Сборка «' + instance.name + '» создана', 'success');
   return { ...instance };
 }
 
@@ -521,7 +527,7 @@ async function selectInstance(id) {
 
 async function updateInstance(id, patch) {
   const instance = requireInstance(id);
-  if (!patch || typeof patch !== 'object') throw new Error('Некорректные настройки экземпляра');
+  if (!patch || typeof patch !== 'object') throw new Error('Некорректные настройки сборки');
   const next = { ...instance };
   if (patch.name !== undefined) {
     if (!validName(patch.name)) throw new Error('Название: от 2 до 40 символов');
@@ -545,7 +551,7 @@ async function updateInstance(id, patch) {
     next.note = patch.note.trim();
   }
   if (patch.accent !== undefined) {
-    if (!['violet', 'blue', 'rose', 'amber'].includes(patch.accent)) throw new Error('Неизвестный цвет экземпляра');
+    if (!['violet', 'blue', 'rose', 'amber'].includes(patch.accent)) throw new Error('Неизвестный цвет сборки');
     next.accent = patch.accent;
   }
   Object.assign(instance, next);
@@ -556,9 +562,9 @@ async function updateInstance(id, patch) {
 
 async function setInstanceCover(id) {
   const instance = requireInstance(id);
-  if (instance.legacy) throw new Error('Обложку старого экземпляра можно добавить после переноса в новую папку');
+  if (instance.legacy) throw new Error('Обложку старой сборки можно добавить после переноса в новую папку');
   const result = await dialog.showOpenDialog(window, {
-    title: 'Выберите обложку экземпляра',
+    title: 'Выберите обложку сборки',
     properties: ['openFile'],
     filters: [{ name: 'Изображения', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
   });
@@ -585,7 +591,7 @@ async function setInstanceCover(id) {
   instance.coverRevision = Date.now();
   await persist();
   emitState();
-  status('Обложка экземпляра обновлена', 'success');
+  status('Обложка сборки обновлена', 'success');
   return { ...instance };
 }
 
@@ -613,7 +619,7 @@ async function removeInstance(id) {
   let movedTo = '';
   if (!instance.legacy && managed) {
     const stat = await fs.lstat(target).catch(() => null);
-    if (stat?.isSymbolicLink()) throw new Error('Папка экземпляра является ссылкой');
+    if (stat?.isSymbolicLink()) throw new Error('Папка сборки является ссылкой');
     if (stat?.isDirectory()) {
       const trash = path.join(path.dirname(managed), 'trash');
       await fs.mkdir(trash, { recursive: true });
@@ -625,7 +631,7 @@ async function removeInstance(id) {
   if (settings.selectedInstanceId === id) settings.selectedInstanceId = settings.instances[0]?.id || '';
   await persist();
   emitState();
-  status('Экземпляр удалён из списка' + (movedTo ? '; файлы перемещены в корзину Veyra' : ''), 'success');
+  status('Сборка удалена из списка' + (movedTo ? '; файлы перемещены в корзину Veyra' : ''), 'success');
   return { movedTo };
 }
 
@@ -651,8 +657,10 @@ async function saveSettings(patch) {
     next.javaPath = patch.javaPath;
   }
   if (patch.showSnapshots !== undefined) next.showSnapshots = Boolean(patch.showSnapshots);
+  if (patch.appearance !== undefined) next.appearance = appearance(patch.appearance, true);
   settings = next;
   await persist();
+  applyWindowAppearance(settings.appearance);
   emitState();
   return publicState();
 }
@@ -711,7 +719,7 @@ async function installInstance(id) {
     }
     await persist();
     emitState();
-    status('Экземпляр «' + instance.name + '» готов', 'success');
+    status('Сборка «' + instance.name + '» готова', 'success');
     return publicState();
   } catch (error) {
     instance.installed = false;
@@ -734,7 +742,7 @@ function offlineUuid(name) {
 
 async function launchInstance(id) {
   const instance = requireInstance(id);
-  if (!instance.installed) throw new Error('Сначала установите экземпляр');
+  if (!instance.installed) throw new Error('Сначала установите сборку');
   if (authController) throw new Error('Завершите Microsoft-вход или отмените его перед запуском');
   const operation = beginOperation('launch', id);
   try {
@@ -776,8 +784,13 @@ async function launchInstance(id) {
       launcherName: 'Veyra Launcher',
       extraExecOption: { windowsHide: true },
     });
-    const run = { child, instanceId: id, stopping: false, stoppedByUser: false };
+    const run = { child, instanceId: id, stopping: false, stoppedByUser: false, startedAt: Date.now(), accountedAt: Date.now(), settled: false };
     gameProcess = run;
+    run.timer = setInterval(() => {
+      accountPlaytime(run);
+      persist().catch((error) => log('История игры: ' + errorMessage(error)));
+      emitState();
+    }, 15000);
     lastCrash = null;
     let recentOutput = '';
     const launchedAt = Date.now();
@@ -794,11 +807,13 @@ async function launchInstance(id) {
     child.stdout?.on('data', onOutput);
     child.stderr?.on('data', onOutput);
     child.once('error', (error) => {
+      settlePlaytime(run);
       reportError('Minecraft', error);
       if (gameProcess?.child === child) gameProcess = null;
       emitState();
     });
     child.once('close', async (code, signal) => {
+      settlePlaytime(run);
       if (gameProcess?.child === child) gameProcess = null;
       emitState();
       if (run.stoppedByUser) status('Игра остановлена');
@@ -827,6 +842,22 @@ async function launchInstance(id) {
     reportError('Не удалось запустить игру', error);
     throw error;
   } finally { endOperation(operation); }
+}
+
+function accountPlaytime(run) {
+  if (run.settled) return;
+  const now = Date.now();
+  const item = settings.instances.find((entry) => entry.id === run.instanceId);
+  if (item) item.playedMs += Math.max(0, now - run.accountedAt);
+  run.accountedAt = now;
+}
+
+function settlePlaytime(run) {
+  if (run.settled) return;
+  accountPlaytime(run);
+  run.settled = true;
+  clearInterval(run.timer);
+  persist().catch((error) => log('История игры: ' + errorMessage(error)));
 }
 
 async function stopGame() {
@@ -921,6 +952,7 @@ function registerIpc() {
     return true;
   });
   ipcMain.handle('launcher:save-settings', (_event, patch) => saveSettings(patch));
+  ipcMain.handle('launcher:preview-appearance', (_event, value) => { applyWindowAppearance(appearance(value, true)); return true; });
   ipcMain.handle('launcher:scan-java', async () => {
     javaCandidates = await scanJava(dataDir(), [settings.javaPath, ...settings.instances.map((item) => item.javaPath)]);
     emitState();
@@ -956,8 +988,8 @@ function createWindow() {
     frame: false,
     title: 'Veyra Launcher',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
-    backgroundColor: acrylic ? '#00000000' : '#080911',
-    ...(acrylic ? { backgroundMaterial: 'acrylic' } : {}),
+    backgroundColor: acrylic && settings.appearance.transparency > 0 ? '#00000000' : '#080911',
+    ...(acrylic ? { backgroundMaterial: settings.appearance.transparency > 0 ? 'acrylic' : 'none' } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -970,6 +1002,14 @@ function createWindow() {
   window.on('closed', () => { window = null; });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event) => event.preventDefault());
+}
+
+function applyWindowAppearance(value) {
+  if (!window || window.isDestroyed()) return;
+  const supported = process.platform === 'win32' && Number(os.release().split('.')[2]) >= 22621;
+  const glass = supported && value.transparency > 0;
+  window.setBackgroundColor(glass ? '#00000000' : '#080911');
+  if (supported) window.setBackgroundMaterial(glass ? 'acrylic' : 'none');
 }
 
 app.whenReady().then(async () => {
@@ -1004,4 +1044,12 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => app.quit());
-app.on('before-quit', () => authController?.abort());
+let finishingQuit = false;
+app.on('before-quit', (event) => {
+  authController?.abort();
+  if (!gameProcess || finishingQuit) return;
+  event.preventDefault();
+  finishingQuit = true;
+  settlePlaytime(gameProcess);
+  persist().catch((error) => log('История игры: ' + errorMessage(error))).finally(() => app.quit());
+});

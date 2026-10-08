@@ -43,7 +43,8 @@ async function main() {
     fs.mkdirSync(output, { recursive: true });
     await page.waitForTimeout(380);
     await page.screenshot({ path: path.join(output, 'create.png') });
-    await page.locator('#create-version').selectOption('1.21.8');
+    await page.locator('#version-search').fill('1.21.8');
+    await page.locator('[data-version="1.21.8"]').click();
     for (const loader of ['fabric', 'neoforge', 'forge']) {
       await page.locator('[data-loader="' + loader + '"]').click();
       await page.waitForFunction(() => {
@@ -54,6 +55,7 @@ async function main() {
     }
     await page.locator('[data-loader="vanilla"]').click();
     await page.locator('[data-close="create-dialog"]').first().click();
+    await page.waitForFunction(() => !document.getElementById('create-dialog').open);
 
     const instance = await page.evaluate(() => window.launcher.createInstance({
       name: 'Smoke World',
@@ -104,7 +106,7 @@ async function main() {
       image.onerror = () => resolve(false);
       image.src = url;
     }), customized.coverUrl);
-    assert.ok(coverLoads, 'Не загрузилась обложка экземпляра');
+    assert.ok(coverLoads, 'Не загрузилась обложка сборки');
 
     await page.locator('.rail-button[data-view="settings"]').click();
     assert.equal(await page.locator('#memory-range').getAttribute('max'), String(initial.maxMemoryGb));
@@ -143,7 +145,7 @@ async function main() {
     assert.equal(removed.instances.length, 0);
     assert.ok(!fs.existsSync(instance.directory));
     assert.deepEqual(errors, [], 'Ошибки интерфейса: ' + errors.join('; '));
-    process.stdout.write('OK: версии, 3 загрузчика, CRUD экземпляра, изоляция файлов, настройки и интерфейс.\n');
+    process.stdout.write('OK: версии, 3 загрузчика, CRUD сборки, изоляция файлов, настройки и интерфейс.\n');
   } finally {
     await app.close();
   }
