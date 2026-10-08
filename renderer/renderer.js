@@ -17,7 +17,7 @@
     svg.append(use);
     return svg;
   };
-  const friendlyError = (error) => error && error.message ? error.message : String(error || 'Неизвестная ошибка');
+  const friendlyError = (error) => String(error && error.message ? error.message : error || 'Неизвестная ошибка').replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
   const instances = () => state.data?.instances || [];
   const selected = () => instances().find((item) => item.id === state.data?.settings.selectedInstanceId) || instances()[0] || null;
   const setText = (id, value) => { if (el(id).textContent !== String(value)) el(id).textContent = String(value); };
@@ -209,7 +209,7 @@
     const running = state.data.runningInstanceId === item.id;
     const stopping = running && state.data.stoppingGame;
     const working = operation?.instanceId === item.id;
-    setText('main-action-label', working ? (operation.type === 'launch' ? 'Запускаем…' : 'Устанавливаем…') :
+    setText('main-action-label', working ? (operation.type === 'launch' ? 'Запускаем…' : operation.type === 'content' ? 'Меняем содержимое…' : 'Устанавливаем…') :
       (stopping ? 'Останавливаем…' : (running ? 'Остановить игру' : (item.installed ? 'Играть' : 'Установить'))));
     el('main-action-icon').querySelector('use').setAttribute('href', '#i-' + (running ? 'stop' : (item.installed ? 'play' : 'download')));
     el('main-action').classList.toggle('button-danger', running);
@@ -254,6 +254,8 @@
     setText('memory-limit-hint', 'На компьютере ' + state.data.systemMemoryGb + ' ГБ. Лимит для игры — ' + maximum + ' ГБ; 2 ГБ оставляем системе.');
     for (const button of document.querySelectorAll('[data-memory]')) button.disabled = Number(button.dataset.memory) > maximum;
     el('show-snapshots').checked = settings.showSnapshots;
+    el('discord-enabled').checked = settings.discordEnabled;
+    renderDiscord();
     el('java-path').value = settings.javaPath || '';
     state.javaMode = settings.javaPath ? 'manual' : 'auto';
     renderJavaMode();
@@ -271,6 +273,12 @@
     setText('java-explain', automatic
       ? 'Veyra подберёт нужную Java и при необходимости загрузит официальную сборку.'
       : 'Выбранная Java должна соответствовать версии Minecraft. Для разных сборок можно указать отдельный путь.');
+  }
+  function renderDiscord() {
+    const value = state.data?.discordStatus || 'waiting';
+    const labels = { disabled: 'Статус выключен', connecting: 'Подключаемся к Discord…', waiting: 'Откройте приложение Discord — подключимся автоматически', connected: 'Подключён · активность VeyraLauncher', error: 'Discord отклонил активность. Проверьте приложение в Developer Portal.' };
+    setText('discord-status', labels[value] || labels.waiting);
+    el('discord-status').classList.toggle('is-connected', value === 'connected');
   }
   function renderJavaCandidates() {
     const target = el('java-candidates');
@@ -723,6 +731,7 @@
       }, Boolean(state.data.operation || state.data.stoppingGame || state.data.runningInstanceId && state.data.runningInstanceId !== id)],
       ['edit', 'Переименовать', async () => { await api.selectInstance(id); showView('home'); openQuickRename(); }],
       ['image', 'Сменить обложку', () => api.setInstanceCover(id), Boolean(item.legacy)],
+      ['puzzle', 'Моды и содержимое', () => window.dispatchEvent(new CustomEvent('veyra:content-open', { detail: { id } }))],
       ['star', item.favorite ? 'Убрать из избранного' : 'В избранное', () => api.updateInstance(id, { favorite: !item.favorite })],
       ['folder', 'Открыть папку', () => api.openInstanceFolder(id)],
       ['settings', 'Настройки сборки', () => openEdit(item)],
@@ -816,20 +825,76 @@
     el('edit-java-path').value = item.javaPath || '';
     el('edit-java-group').hidden = !item.javaPath;
     state.editAccent = item.accent || 'violet';
+    state.editBackground = item.backgroundId || 'default';
+    state.editUsePreset = false;
+    state.editCustomUrl = item.coverFile ? item.coverUrl : '';
+    state.studioCoverKey = '';
+    el('studio-error').hidden = true;
+    setStudioTab('design');
+    renderBackgroundGallery();
     renderAccentOptions();
     el('edit-favorite').checked = Boolean(item.favorite);
     renderCoverPreview(item);
+    renderStudioText();
+    setText('studio-memory-hint', 'На этом ПК до ' + memoryMaximum() + ' ГБ для игры.');
     setText('edit-directory', item.directory);
     el('edit-directory').title = item.directory;
     showDialog(el('instance-dialog'));
   }
   function renderCoverPreview(item) {
-    el('cover-preview').style.backgroundImage = item?.coverUrl ? 'url("' + item.coverUrl + '")' : '';
-    el('cover-preview').classList.toggle('has-custom-cover', Boolean(item?.coverUrl));
-    el('cover-preview').classList.remove('accent-violet', 'accent-blue', 'accent-rose', 'accent-amber');
-    el('cover-preview').classList.add('accent-' + state.editAccent);
-    el('reset-cover').disabled = !item?.coverUrl;
+    const background = state.data.backgrounds.find(entry => entry.id === state.editBackground) || state.data.backgrounds[0];
+    const custom = !state.editUsePreset && state.editCustomUrl;
+    const url = custom || background.url;
+    const art = el('cover-preview');
+    if (state.studioCoverKey !== url) {
+      const old = art.cloneNode(false); old.removeAttribute('id'); old.className = 'studio-art studio-art-outgoing';
+      for (const layer of el('studio-scene').querySelectorAll('.studio-art-outgoing')) layer.remove();
+      if (state.studioCoverKey && el('instance-dialog').open) { art.before(old); setTimeout(() => old.remove(), 710); }
+      art.style.backgroundImage = 'url("' + url + '")';
+      art.classList.remove('studio-art-incoming'); void art.offsetWidth; art.classList.add('studio-art-incoming');
+      state.studioCoverKey = url;
+    }
+    setText('studio-cover-name', custom ? 'Своя обложка' : background.name);
+    el('studio-scene').classList.remove('accent-violet', 'accent-blue', 'accent-rose', 'accent-amber');
+    el('studio-scene').classList.add('accent-' + state.editAccent);
+    el('reset-cover').hidden = !item?.coverFile;
     el('edit-cover').disabled = Boolean(item?.legacy);
+    for (const button of el('background-gallery').children) {
+      const active = !custom && button.dataset.backgroundId === state.editBackground;
+      button.classList.toggle('is-selected', active); button.setAttribute('aria-pressed', String(active));
+    }
+  }
+  function renderBackgroundGallery() {
+    const gallery = el('background-gallery'); gallery.replaceChildren();
+    for (const [i, background] of state.data.backgrounds.entries()) {
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'studio-background'; button.dataset.backgroundId = background.id;
+      button.title = background.name; button.style.setProperty('--tile-order', i);
+      const image = document.createElement('img'); image.src = background.thumbnail; image.alt = ''; image.draggable = false;
+      const label = document.createElement('span'); label.textContent = background.name;
+      button.append(image, label, icon('check'));
+      button.addEventListener('click', () => chooseBackground(background.id));
+      gallery.append(button);
+    }
+  }
+  function chooseBackground(id) {
+    state.editBackground = id; state.editUsePreset = true;
+    renderCoverPreview(instances().find(item => item.id === state.editingId));
+  }
+  function setStudioTab(tab) {
+    for (const button of document.querySelectorAll('[data-studio-tab]')) { const active = button.dataset.studioTab === tab; button.classList.toggle('is-active', active); button.setAttribute('aria-pressed', String(active)); }
+    for (const panel of document.querySelectorAll('[data-studio-panel]')) panel.hidden = panel.dataset.studioPanel !== tab;
+    el('studio-error').hidden = true;
+  }
+  function renderStudioText() {
+    setText('instance-dialog-title', el('edit-name').value.trim() || 'Без названия');
+    setText('studio-note-preview', el('edit-note').value);
+    const memory = el('edit-memory-default').checked ? state.data.settings.memoryGb : el('edit-memory').value;
+    setText('studio-memory-preview', memory + ' ГБ памяти');
+    setText('studio-java-preview', el('edit-java-auto').checked ? 'Java Auto' : 'Своя Java');
+  }
+  async function studioAction(callback) {
+    try { el('studio-error').hidden = true; return await callback(); }
+    catch (error) { setText('studio-error', friendlyError(error)); el('studio-error').hidden = false; return null; }
   }
   function renderAccentOptions() {
     for (const button of document.querySelectorAll('[data-accent]')) {
@@ -883,6 +948,7 @@
   function receive(event) {
     if (!event || typeof event !== 'object') return;
     if (event.type === 'state') { state.data = event.state; render(); }
+    if (event.type === 'discord' && state.data) { state.data.discordStatus = event.status; renderDiscord(); }
     if (event.type === 'install-output' && state.data?.installConsole?.id === event.id) {
       const session = state.data.installConsole;
       session.lines.push(...event.lines.filter(line => line.sequence > (session.lines.at(-1)?.sequence || 0)));
@@ -906,6 +972,7 @@
     if (event.type === 'log' && state.view === 'logs') refreshLogs();
   }
   function bind() {
+    window.addEventListener('veyra:notify', event => toast(event.detail.message, event.detail.undo));
     for (const icon of document.querySelectorAll('svg.icon')) {
       const name = icon.querySelector('use')?.getAttribute('href')?.replace('#i-', '');
       if (name) icon.dataset.motion = name;
@@ -1108,6 +1175,7 @@
     el('stop-game-footer').addEventListener('click', () => action(() => api.stopGame()));
     el('launch-stage-dismiss').addEventListener('click', hideLaunchStage);
     el('hero-folder').addEventListener('click', () => { const item = selected(); if (item) action(() => api.openInstanceFolder(item.id)); });
+    el('hero-content').addEventListener('click', () => { const item = selected(); if (item) window.dispatchEvent(new CustomEvent('veyra:content-open', { detail: { id: item.id } })); });
     el('hero-edit').addEventListener('click', () => openEdit(selected()));
     el('hero-rename').addEventListener('click', openQuickRename);
     el('hero-rename-cancel').addEventListener('click', closeQuickRename);
@@ -1187,38 +1255,61 @@
       button.addEventListener('click', () => {
         state.editAccent = button.dataset.accent;
         renderAccentOptions();
-        el('cover-preview').classList.remove('accent-violet', 'accent-blue', 'accent-rose', 'accent-amber');
-        el('cover-preview').classList.add('accent-' + state.editAccent);
+        renderCoverPreview(instances().find(item => item.id === state.editingId));
       });
     }
     el('edit-cover').addEventListener('click', async () => {
-      const updated = await action(() => api.setInstanceCover(state.editingId));
+      const updated = await studioAction(() => api.setInstanceCover(state.editingId));
       if (updated) {
         const item = instances().find((entry) => entry.id === state.editingId);
+        state.editCustomUrl = item?.coverUrl || ''; state.editUsePreset = false;
         renderCoverPreview(item);
       }
     });
     el('reset-cover').addEventListener('click', async () => {
-      const updated = await action(() => api.resetInstanceCover(state.editingId));
+      const updated = await studioAction(() => api.resetInstanceCover(state.editingId));
       if (updated) {
         const item = instances().find((entry) => entry.id === state.editingId);
+        state.editCustomUrl = '';
         renderCoverPreview(item);
       }
     });
     el('instance-form').addEventListener('submit', async (event) => {
       event.preventDefault();
       const id = state.editingId;
-      const updated = await action(() => api.updateInstance(id, {
+      const updated = await studioAction(() => api.updateInstance(id, {
         name: el('edit-name').value.trim(),
         note: el('edit-note').value,
         memoryGb: el('edit-memory-default').checked ? null : Number(el('edit-memory').value),
         javaPath: el('edit-java-auto').checked ? '' : el('edit-java-path').value,
         accent: state.editAccent,
         favorite: el('edit-favorite').checked,
+        ...(state.editUsePreset ? { backgroundId: state.editBackground } : {}),
       }));
       if (updated) { closeDialog(el('instance-dialog')); toast('Настройки сборки сохранены'); }
     });
     el('edit-open-folder').addEventListener('click', () => action(() => api.openInstanceFolder(state.editingId)));
+    for (const button of document.querySelectorAll('[data-studio-tab]')) button.addEventListener('click', () => setStudioTab(button.dataset.studioTab));
+    for (const id of ['edit-name', 'edit-note', 'edit-memory', 'edit-memory-default', 'edit-java-auto']) el(id).addEventListener('input', renderStudioText);
+    el('edit-name').addEventListener('invalid', () => setStudioTab('design'));
+    el('random-cover').addEventListener('click', () => {
+      const choices = state.data.backgrounds.filter(item => item.id !== 'default' && item.id !== state.editBackground);
+      const value = new Uint32Array(1); crypto.getRandomValues(value);
+      chooseBackground(choices[value[0] % choices.length].id);
+      el('random-cover').animate([{ rotate: '0deg' }, { rotate: '180deg' }], { duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 480, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    });
+    el('studio-scene').addEventListener('pointermove', event => {
+      if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      event.currentTarget.style.setProperty('--scene-x', ((event.clientX - rect.left) / rect.width - .5) * 12 + 'px');
+      event.currentTarget.style.setProperty('--scene-y', ((event.clientY - rect.top) / rect.height - .5) * 12 + 'px');
+    });
+    el('studio-scene').addEventListener('pointerleave', event => { event.currentTarget.style.setProperty('--scene-x', '0px'); event.currentTarget.style.setProperty('--scene-y', '0px'); });
+    el('studio-content').addEventListener('click', () => { el('instance-dialog').close(); window.dispatchEvent(new CustomEvent('veyra:content-open', { detail: { id: state.editingId } })); });
+    el('discord-enabled').addEventListener('change', async () => {
+      const result = await action(() => api.saveSettings({ discordEnabled: el('discord-enabled').checked }));
+      if (!result) el('discord-enabled').checked = state.data.settings.discordEnabled;
+    });
     el('remove-instance').addEventListener('click', () => {
       state.removingId = state.editingId;
       el('instance-dialog').close();
@@ -1252,6 +1343,7 @@
         javaPath: state.javaMode === 'auto' ? '' : el('java-path').value,
         showSnapshots: el('show-snapshots').checked,
         appearance: state.appearanceDraft,
+        discordEnabled: el('discord-enabled').checked,
       }));
       if (saved) { renderSettings(); renderVersionOptions(); toast('Настройки сохранены'); }
     });

@@ -90,7 +90,9 @@ async function main() {
     await page.locator('#edit-name').fill('Renamed World');
     await page.locator('#edit-note').fill('Построить город над озером');
     assert.equal(await page.locator('#edit-memory').getAttribute('max'), String(initial.maxMemoryGb));
+    await page.locator('[data-studio-tab="game"]').click();
     assert.ok((await page.locator('#edit-java-auto').boundingBox()).width < 60);
+    await page.locator('[data-studio-tab="design"]').click();
     await page.screenshot({ path: path.join(output, 'instance.png') });
     await page.locator('#instance-form button[type="submit"]').click();
     const customized = (await page.evaluate(() => window.launcher.getState())).instances[0];

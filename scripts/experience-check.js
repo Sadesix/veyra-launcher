@@ -35,7 +35,7 @@ async function main() {
     await page.waitForTimeout(800);
     assert.equal(await page.locator('.hero-outgoing').count(), 0);
     await page.locator('#home-instance-grid [data-instance-id="atlas"]').click({ button: 'right' });
-    assert.equal(await page.locator('#build-context-menu [role="menuitem"]').count(), 7);
+    assert.equal(await page.locator('#build-context-menu [role="menuitem"]').count(), 8);
     await page.keyboard.press('End');
     assert.equal(await page.evaluate(() => document.activeElement.dataset.action), 'trash');
     await page.keyboard.press('Escape');

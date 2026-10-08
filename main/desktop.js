@@ -15,6 +15,9 @@ const { prechecks, javaArguments } = require('./launch-runtime');
 const { appearance } = require('./appearance');
 const { validPlayerName } = require('./local-profile');
 const { observeOutput, cleanOutput } = require('./install-output');
+const { ContentManager, KINDS } = require('./content-manager');
+const { backgrounds, validBackground, randomBackground } = require('./backgrounds');
+const { DiscordPresence } = require('./discord-presence');
 const microsoftConfig = require('./microsoft-config.json');
 
 if (process.env.VEYRA_TEST_DATA_DIR) app.setPath('userData', path.resolve(process.env.VEYRA_TEST_DATA_DIR));
@@ -39,6 +42,8 @@ let lastCrash = null;
 let accountRevision = 0;
 let accountRefreshPromise = null;
 const microsoft = new MicrosoftAuth();
+const content = new ContentManager({ version: app.getVersion() });
+const discord = new DiscordPresence({ onStatus: () => { if (settings) broadcast({ type: 'discord', status: discord.status }); } });
 
 const dataDir = () => app.getPath('userData');
 const settingsFile = () => path.join(dataDir(), 'settings.json');
@@ -101,6 +106,7 @@ function defaultSettings() {
     memoryGb: Math.min(4, maxMemoryGb()),
     javaPath: '',
     showSnapshots: false,
+    discordEnabled: !process.env.VEYRA_TEST_DATA_DIR,
     selectedInstanceId: '',
     instances: [],
     appearance: appearance(),
@@ -157,6 +163,7 @@ function sanitizeInstance(raw) {
     accent: ['violet', 'blue', 'rose', 'amber'].includes(raw.accent) ? raw.accent : 'violet',
     coverFile: typeof raw.coverFile === 'string' && /^cover\.(png|jpg|webp)$/.test(raw.coverFile) ? raw.coverFile : '',
     coverRevision: Number.isSafeInteger(raw.coverRevision) ? raw.coverRevision : 0,
+    backgroundId: validBackground(raw.backgroundId) ? raw.backgroundId : 'default',
     legacy: Boolean(raw.legacy),
     installed: false,
   };
@@ -195,6 +202,7 @@ async function loadState() {
   if (Number.isInteger(saved.memoryGb) && saved.memoryGb >= 1) settings.memoryGb = Math.min(saved.memoryGb, maxMemoryGb());
   if (typeof saved.javaPath === 'string' && (!saved.javaPath || path.isAbsolute(saved.javaPath))) settings.javaPath = saved.javaPath;
   settings.showSnapshots = Boolean(saved.showSnapshots);
+  if (typeof saved.discordEnabled === 'boolean') settings.discordEnabled = saved.discordEnabled;
   settings.appearance = appearance(saved.appearance);
   if (Array.isArray(saved.instances)) {
     settings.instances = saved.instances.map(sanitizeInstance).filter(Boolean);
@@ -250,17 +258,21 @@ function publicState() {
       showSnapshots: settings.showSnapshots,
       selectedInstanceId: settings.selectedInstanceId,
       appearance: { ...settings.appearance },
+      discordEnabled: settings.discordEnabled,
     },
     instances: settings.instances.map((instance) => ({
       ...instance,
-      coverUrl: instance.coverFile ? 'veyra://cover/' + encodeURIComponent(instance.id) + '?v=' + instance.coverRevision : '',
+      coverUrl: instance.coverFile ? 'veyra://cover/' + encodeURIComponent(instance.id) + '?v=' + instance.coverRevision : backgrounds.find(item => item.id === instance.backgroundId)?.url || '',
     })),
     versions,
+    backgrounds,
+    discordStatus: discord.status,
     javaCandidates,
     operation: activeOperation ? {
       type: activeOperation.type,
       instanceId: activeOperation.instanceId,
       progress: lastProgress,
+      cancellable: activeOperation.type === 'install' || Boolean(activeOperation.cancellable),
     } : null,
     runningInstanceId: gameProcess?.instanceId || null,
     stoppingGame: Boolean(gameProcess?.stopping),
@@ -409,7 +421,18 @@ async function microsoftIdentity(signal, force = false) {
 }
 
 function emitState() {
+  if (settings) updateDiscord();
   if (settings) broadcast({ type: 'state', state: publicState() });
+}
+
+function updateDiscord() {
+  const running = gameProcess && settings.instances.find(item => item.id === gameProcess.instanceId);
+  discord.configure(settings.discordEnabled);
+  discord.update(running ? {
+    type: 0, details: 'Играет в Minecraft ' + running.minecraftVersion,
+    state: running.name + ' · ' + ({ vanilla: 'Vanilla', fabric: 'Fabric', neoforge: 'NeoForge', forge: 'Forge' }[running.loader]),
+    timestamps: { start: Math.floor(gameProcess.startedAt / 1000) },
+  } : { type: 0, details: 'В библиотеке сборок', state: 'Готовится к приключению' });
 }
 
 function progress(value, force = false) {
@@ -540,6 +563,7 @@ async function createInstance(input) {
     directory,
     createdAt: new Date().toISOString(),
     accent: 'violet',
+    backgroundId: randomBackground(),
   });
   settings.instances.unshift(instance);
   settings.selectedInstanceId = id;
@@ -585,6 +609,12 @@ async function updateInstance(id, patch) {
   if (patch.accent !== undefined) {
     if (!['violet', 'blue', 'rose', 'amber'].includes(patch.accent)) throw new Error('Неизвестный цвет сборки');
     next.accent = patch.accent;
+  }
+  if (patch.backgroundId !== undefined) {
+    if (!validBackground(patch.backgroundId)) throw new Error('Неизвестная обложка');
+    next.backgroundId = patch.backgroundId;
+    next.coverFile = '';
+    next.coverRevision = Date.now();
   }
   Object.assign(instance, next);
   await persist();
@@ -690,6 +720,7 @@ async function saveSettings(patch) {
     next.javaPath = patch.javaPath;
   }
   if (patch.showSnapshots !== undefined) next.showSnapshots = Boolean(patch.showSnapshots);
+  if (patch.discordEnabled !== undefined) next.discordEnabled = patch.discordEnabled === true;
   if (patch.appearance !== undefined) next.appearance = appearance(patch.appearance, true);
   settings = next;
   await persist();
@@ -937,6 +968,33 @@ async function openInstanceFolder(id) {
   return true;
 }
 
+async function changeContent(id, label, callback, cancellable = false) {
+  const instance = requireInstance(id);
+  const operation = beginOperation('content', id);
+  operation.cancellable = cancellable;
+  emitState();
+  progress({ phase: label, message: label, completed: 0, total: 0 }, true);
+  try {
+    const result = await callback(instance, operation);
+    status(label + ' — готово', 'success');
+    broadcast({ type: 'content-changed', instanceId: id });
+    return result;
+  } catch (error) {
+    if (operation.signal.aborted) { status('Добавление отменено'); return { cancelled: true }; }
+    reportError('Содержимое сборки', error);
+    throw error;
+  } finally { endOperation(operation); }
+}
+
+async function importContent(id, kind) {
+  requireInstance(id);
+  if (!KINDS[kind]) throw new Error('Неизвестный раздел содержимого');
+  const save = kind === 'saves';
+  const selection = await dialog.showOpenDialog(window, { title: save ? 'Выберите папки сохранений с level.dat' : 'Добавить файлы в сборку', properties: [save ? 'openDirectory' : 'openFile', 'multiSelections'], ...(save ? {} : { filters: [{ name: kind === 'mods' ? 'Моды Minecraft' : 'Архивы', extensions: [kind === 'mods' ? 'jar' : 'zip'] }] }) });
+  if (selection.canceled) return { cancelled: true };
+  return changeContent(id, 'Импорт содержимого', instance => content.import(instance, kind, selection.filePaths));
+}
+
 async function pickJava() {
   const result = await dialog.showOpenDialog(window, {
     title: 'Выберите java.exe или javaw.exe',
@@ -988,7 +1046,7 @@ function registerIpc() {
   ipcMain.handle('launcher:launch-instance', (_event, id) => launchInstance(id));
   ipcMain.handle('launcher:stop-game', () => stopGame());
   ipcMain.handle('launcher:cancel-operation', async () => {
-    if (!activeOperation || activeOperation.type !== 'install') return false;
+    if (!activeOperation || !(activeOperation.type === 'install' || activeOperation.cancellable)) return false;
     activeOperation.controller.abort();
     activeOperation.task?.cancel().catch((error) => log('Ошибка отмены: ' + errorMessage(error)));
     status('Отменяем установку…');
@@ -1012,6 +1070,29 @@ function registerIpc() {
   ipcMain.handle('launcher:get-logs', () => getLogs());
   ipcMain.handle('launcher:copy-install-console', () => {
     clipboard.writeText((installConsole?.lines || []).map(line => '[' + new Date(line.time).toISOString() + '] [' + line.source + '] ' + line.text).join('\n'));
+    return true;
+  });
+  ipcMain.handle('launcher:get-content', (_event, id, kind) => content.list(requireInstance(id), kind));
+  ipcMain.handle('launcher:content-categories', (_event, kind) => content.categories(kind));
+  ipcMain.handle('launcher:search-content', (_event, id, kind, options) => content.search(requireInstance(id), kind, options));
+  ipcMain.handle('launcher:plan-content', (_event, id, kind, projectId, options) => content.plan(requireInstance(id), kind, projectId, options));
+  ipcMain.handle('launcher:install-content', (_event, id, token) => changeContent(id, 'Установка из Modrinth', (instance, operation) => content.install(instance, token, operation.signal, value => progress(value)), true));
+  ipcMain.handle('launcher:toggle-content', (_event, id, kind, name, enabled) => changeContent(id, enabled ? 'Включение' : 'Отключение', instance => content.toggle(instance, kind, name, Boolean(enabled))));
+  ipcMain.handle('launcher:trash-content', (_event, id, kind, name) => changeContent(id, 'Перемещение в корзину', instance => content.trash(instance, kind, name)));
+  ipcMain.handle('launcher:restore-content', (_event, id, trashId) => changeContent(id, 'Восстановление', instance => content.restore(instance, trashId)));
+  ipcMain.handle('launcher:rename-save', (_event, id, name, next) => changeContent(id, 'Переименование сохранения', instance => content.renameSave(instance, name, next)));
+  ipcMain.handle('launcher:duplicate-save', (_event, id, name) => changeContent(id, 'Копирование сохранения', instance => content.duplicateSave(instance, name)));
+  ipcMain.handle('launcher:import-content', (_event, id, kind) => importContent(id, kind));
+  ipcMain.handle('launcher:open-content-folder', async (_event, id, kind) => {
+    const target = await content.root(requireInstance(id), kind);
+    const error = await shell.openPath(target);
+    if (error) throw new Error(error);
+    return true;
+  });
+  ipcMain.handle('launcher:reveal-content', async (_event, id, kind, name) => { shell.showItemInFolder((await content.entry(requireInstance(id), kind, name)).file); return true; });
+  ipcMain.handle('launcher:open-content-project', async (_event, projectId) => {
+    if (typeof projectId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(projectId)) throw new Error('Некорректный проект');
+    await shell.openExternal('https://modrinth.com/project/' + encodeURIComponent(projectId));
     return true;
   });
   ipcMain.handle('launcher:window-minimize', () => { window?.minimize(); return true; });
@@ -1079,6 +1160,7 @@ app.whenReady().then(async () => {
   accountSession = await accountVault.read();
   if (accountSession?.clientId !== microsoftClientId()) accountSession = null;
   if (!accountSession) settings.accountMode = 'local';
+  updateDiscord();
   registerIpc();
   createWindow();
   refreshVersions().catch(() => {});
@@ -1093,6 +1175,7 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => app.quit());
 let finishingQuit = false;
 app.on('before-quit', (event) => {
+  discord.dispose();
   authController?.abort();
   if (!gameProcess || finishingQuit) return;
   event.preventDefault();
