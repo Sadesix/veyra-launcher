@@ -6,7 +6,7 @@ const { createHash } = require('node:crypto');
 const { ContentManager } = require('../main/content-manager');
 
 function fixtures() {
-  const projects = Object.fromEntries(['mainmod', 'library', 'broken', 'forgeonly', 'preview', 'shader', 'pack', 'cyclea', 'cycleb', 'pinned'].map(id => [id, { id, title: id === 'mainmod' ? 'Aurora Tools' : id === 'library' ? 'Aurora Library' : id, project_type: id === 'shader' ? 'shader' : id === 'pack' ? 'resourcepack' : 'mod', icon_url: '' }]));
+  const projects = Object.fromEntries(['mainmod', 'secondmod', 'library', 'broken', 'forgeonly', 'preview', 'shader', 'pack', 'cyclea', 'cycleb', 'pinned'].map(id => [id, { id, title: id === 'mainmod' ? 'Aurora Tools' : id === 'secondmod' ? 'Waypoint Atlas' : id === 'library' ? 'Aurora Library' : id, project_type: id === 'shader' ? 'shader' : id === 'pack' ? 'resourcepack' : 'mod', icon_url: '' }]));
   const files = new Map();
   const versions = {};
   function version(id, projectId, number, dependencies = [], loaders = ['fabric'], channel = 'release') {
@@ -19,6 +19,7 @@ function fixtures() {
   version('lib1', 'library', '1.0');
   version('mod1', 'mainmod', '1.0', [{ dependency_type: 'required', project_id: 'library', version_id: 'lib1' }]);
   version('mod2', 'mainmod', '2.0', [{ dependency_type: 'required', project_id: 'library', version_id: 'lib1' }]);
+  version('second1', 'secondmod', '1.0', [{ dependency_type: 'required', project_id: 'library', version_id: 'lib1' }]);
   version('bad1', 'broken', '1.0');
   version('forge1', 'forgeonly', '1.0', [], ['forge']);
   version('beta1', 'preview', '1.0', [], ['fabric'], 'beta');
@@ -27,7 +28,7 @@ function fixtures() {
   version('a1', 'cyclea', '1.0', [{ dependency_type: 'required', project_id: 'cycleb' }]);
   version('b1', 'cycleb', '1.0', [{ dependency_type: 'required', project_id: 'cyclea' }]);
   version('pin1', 'pinned', '1.0', [{ dependency_type: 'required', project_id: 'mainmod', version_id: 'mod1' }]);
-  let corrupt = false, delay = false;
+  let corrupt = false, corruptProject = '', delay = false;
   const requests = [];
   const fetcher = async (input, options = {}) => {
     const url = new URL(input); requests.push({ url: url.href, options }); options.signal?.throwIfAborted();
@@ -35,17 +36,22 @@ function fixtures() {
       if (delay) await new Promise((resolve, reject) => { const timer = setTimeout(resolve, 3000); options.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(options.signal.reason); }, { once: true }); });
       const bytes = files.get(url.href);
       if (!bytes) return new Response('', { status: 404 });
-      return new Response(corrupt ? Buffer.alloc(bytes.length, 1) : bytes);
+      return new Response(corrupt || corruptProject && url.pathname.includes('/' + corruptProject + '/') ? Buffer.alloc(bytes.length, 1) : bytes);
     }
     let body;
     if (url.pathname === '/v2/tag/category') body = [{ name: 'technology', project_type: 'mod', header: 'categories' }, { name: 'realistic', project_type: 'shader' }];
-    else if (url.pathname === '/v2/search') body = { total_hits: 1, hits: [{ project_id: 'mainmod', title: 'Aurora Tools', description: 'Useful tools', author: 'Veyra', downloads: 42000, categories: ['technology', 'fabric'] }] };
+    else if (url.pathname === '/v2/search') {
+      const facets = url.searchParams.get('facets') || '';
+      const ids = facets.includes('project_type:shader') ? ['shader'] : facets.includes('project_type:resourcepack') ? ['pack'] : ['mainmod', 'secondmod', 'broken'];
+      const hits = ids.filter(id => (projects[id].title + id).toLowerCase().includes((url.searchParams.get('query') || '').toLowerCase())).map((id, i) => ({ project_id: id, title: projects[id].title, description: ['Новые инструменты и возможности для вашей игры.', 'Отмечайте находки и прокладывайте новые маршруты.', 'Тестовый проект для проверки загрузок.'][i], author: 'Veyra', downloads: 42000 - i * 10000, categories: ['technology', 'fabric'] }));
+      body = { total_hits: hits.length, hits };
+    }
     else if (/\/project\/[^/]+\/version$/.test(url.pathname)) body = Object.values(versions).filter(version => version.project_id === url.pathname.split('/')[3]);
     else if (/\/project\/[^/]+$/.test(url.pathname)) body = projects[url.pathname.split('/')[3]];
     else if (/\/version\/[^/]+$/.test(url.pathname)) body = versions[url.pathname.split('/')[3]];
     return new Response(JSON.stringify(body || {}), { status: body ? 200 : 404 });
   };
-  return { projects, versions, files, requests, fetcher, setCorrupt: value => { corrupt = value; }, setDelay: value => { delay = value; } };
+  return { projects, versions, files, requests, fetcher, setCorrupt: value => { corrupt = value; }, setCorruptProject: value => { corruptProject = value; }, setDelay: value => { delay = value; } };
 }
 
 async function main() {

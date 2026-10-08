@@ -8,7 +8,7 @@ const { setTimeout: delay } = require('node:timers/promises');
 const { chromium } = require('playwright-core');
 
 async function main() {
-  const executable = path.resolve(process.argv[2] || 'dist/Veyra-Launcher-0.6.0-x64.exe');
+  const executable = path.resolve(process.argv[2] || 'dist/Veyra-Launcher-0.6.1-x64.exe');
   const dataDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-portable-'));
   const server = net.createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -37,7 +37,7 @@ async function main() {
     page = browser.contexts()[0].pages()[0];
     await page.locator('#profile-top').waitFor();
     const initial = await page.evaluate(() => window.launcher.getState());
-    assert.equal(initial.appVersion, '0.6.0');
+    assert.equal(initial.appVersion, '0.6.1');
     assert.deepEqual(initial.settings.appearance, { transparency: 0, brightness: 100, blur: 18, picture: true });
     assert.equal(await page.locator('#greeting-name').textContent(), initial.account.name);
     assert.equal(initial.dataDirectory.toLowerCase(), dataDirectory.toLowerCase());

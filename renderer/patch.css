@@ -1,0 +1,38 @@
+/* The hit area stays still; only the drawing inside the control moves. */
+button > svg,button > svg *,button > img,button > span,button > b { pointer-events: none; }
+.close-control { min-width: 44px !important; min-height: 44px !important; flex: none; transform: none !important; display: grid; place-items: center; padding: 0; }
+.close-control:hover { transform: none !important; }
+.close-control .icon { pointer-events: none; }
+.close-control:hover .icon { transform: rotate(90deg); }
+.modal-close,.content-plan-head .button-icon,#content-plan-close,#cart-close { width: 44px; height: 44px; min-width: 44px; min-height: 44px; flex: none; border-radius: 12px; padding: 0; transform: none; }
+.modal-close:hover,.modal-close:active,#content-plan-close:hover,#cart-close:hover { transform: none; }
+.modal-close .icon,#content-plan-close .icon,#cart-close .icon { width: 19px; height: 19px; pointer-events: none; transition: transform .42s cubic-bezier(.16,1,.3,1); }
+.modal-close:hover .icon,#content-plan-close:hover .icon,#cart-close:hover .icon { transform: rotate(90deg); }
+.window-controls button { width: 43px; height: 42px; min-width: 43px; -webkit-app-region: no-drag; }
+#window-close { transform: none; }
+#window-close:hover .icon { transform: rotate(90deg); }
+#notice-close { min-width: 40px; min-height: 40px; display: grid; place-items: center; }
+.hero-rename-form #hero-rename-cancel { width: 42px; height: 42px; flex: none; transform: none; }
+.field-error,.form-alert { color: #ffb1c3 !important; font-size: 11px !important; line-height: 1.6; animation: fieldNotice .3s cubic-bezier(.16,1,.3,1) both; }
+.field-error { display: flex; align-items: baseline; gap: 7px; margin: 2px 0 0; }
+.field-error::before { content: ''; width: 4px; height: 4px; flex: none; border-radius: 50%; background: #ff9fb8; }
+.form-alert { padding: 11px 13px; border: 1px solid #ed78982a; border-radius: 11px; background: #ed78980a; margin: 14px 0; }
+input[aria-invalid=true],select[aria-invalid=true],textarea[aria-invalid=true] { border-color: #e17d9b99 !important; box-shadow: 0 0 0 3px #e17d9b0b; }
+.hero-rename-form .field-error { position: absolute; left: 0; top: calc(100% + 5px); background: #19121fec; border: 1px solid #ec98b135; padding: 6px 10px; border-radius: 7px; z-index: 5; }
+.icon { transition: transform .42s cubic-bezier(.2,.8,.2,1),color .3s,filter .3s; }
+button:hover svg[data-motion=puzzle] { animation: puzzleSnap .55s cubic-bezier(.16,1,.3,1) both; }
+button:hover svg[data-motion=bag] { animation: bagSwing .6s cubic-bezier(.16,1,.3,1) both; }
+button:hover svg[data-motion=copy] { transform: translate(2px,-2px) rotate(-6deg); }
+button:hover svg[data-motion=save],button:hover svg[data-motion=layers] { animation: layerFloat .6s ease both; }
+button:hover svg[data-motion=edit] { transform: translate(2px,-2px) rotate(-12deg); }
+button:hover svg[data-motion=trash] { transform: rotate(-10deg) translateY(-2px); }
+button:hover svg[data-motion=search] { transform: rotate(-12deg) scale(1.1); }
+button:hover svg[data-motion=user] { animation: iconWink .6s both; }
+button:hover svg[data-motion=refresh] { transform: rotate(155deg); }
+.rail-button:hover svg[data-motion=home] { animation: layerFloat .6s ease both; }
+.section-icon:hover .icon { transform: rotate(-9deg) scale(1.12); }
+@keyframes fieldNotice { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes puzzleSnap { 0% { transform: scale(1); } 45% { transform: rotate(-14deg) translateY(-3px) scale(1.12); } 100% { transform: rotate(-6deg) scale(1.05); } }
+@keyframes bagSwing { 0% { transform: rotate(0); } 30% { transform: rotate(-12deg); } 65% { transform: rotate(8deg); } 100% { transform: rotate(-3deg); } }
+@keyframes layerFloat { 0% { transform: translateY(0); } 45% { transform: translateY(-4px) scale(1.09); } 100% { transform: translateY(-1px); } }
+@media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }

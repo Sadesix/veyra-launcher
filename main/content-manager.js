@@ -4,6 +4,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { createWriteStream } = require('node:fs');
+const { ContentTransaction } = require('./content-transaction');
 
 const KINDS = { mods: { folder: 'mods', type: 'mod', ext: '.jar' }, saves: { folder: 'saves' }, shaders: { folder: 'shaderpacks', type: 'shader', ext: '.zip' }, resourcepacks: { folder: 'resourcepacks', type: 'resourcepack', ext: '.zip' } };
 const MAX_FILE = 512 * 1024 ** 2;
@@ -47,11 +48,13 @@ function compatible(version, instance, kind) {
 }
 
 class ContentManager {
-  constructor({ fetch: fetcher = (...args) => fetch(...args), version = '0.6.0' } = {}) {
+  constructor({ fetch: fetcher = (...args) => fetch(...args), version = '0.6.1' } = {}) {
     this.fetch = fetcher;
     this.agent = 'VeyraLauncher/' + version;
     this.cache = new Map();
     this.plans = new Map();
+    this.activeTransactions = new Set();
+    this.recoveries = new Map();
   }
   async root(instance, kind) {
     kindInfo(kind);
@@ -64,6 +67,7 @@ class ContentManager {
   }
   async manifest(instance) {
     await plainDirectory(instance.directory, true);
+    await this.recover(instance);
     const file = path.join(instance.directory, '.veyra-content.json');
     const stat = await fs.lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
     if (!stat) return { schema: 1, items: [], trash: [] };
@@ -75,6 +79,14 @@ class ContentManager {
     } catch { throw new Error('Сведения о содержимом повреждены. Файлы игры сохранены'); }
   }
   async save(instance, data) { await atomic(path.join(instance.directory, '.veyra-content.json'), data); }
+  async recover(instance) {
+    if (this.activeTransactions.has(instance.id)) return;
+    if (!this.recoveries.has(instance.id)) {
+      const operation = ContentTransaction.recover(instance.directory).finally(() => this.recoveries.delete(instance.id));
+      this.recoveries.set(instance.id, operation);
+    }
+    return this.recoveries.get(instance.id);
+  }
   async list(instance, kind) {
     const root = await this.root(instance, kind);
     const manifest = await this.manifest(instance);
@@ -237,8 +249,18 @@ class ContentManager {
     return versions.filter(version => compatible(version, instance, kind) && (preview || version.version_type === 'release')).sort((a, b) => (preview ? 0 : Number(b.version_type === 'release') - Number(a.version_type === 'release')) || new Date(b.date_published) - new Date(a.date_published));
   }
   async plan(instance, kind, projectId, options = {}) {
-    if (!KINDS[kind]?.type) throw new Error('Для сохранений доступен импорт папки');
-    if (kind === 'mods' && instance.loader === 'vanilla') throw new Error('Для модов нужна сборка с Fabric, Forge или NeoForge');
+    return this.planBatch(instance, [{ kind, projectId, versionId: options.versionId || '', preview: options.preview === true }]);
+  }
+  async planBatch(instance, selections) {
+    if (!Array.isArray(selections) || !selections.length || selections.length > 40) throw new Error('Добавьте от 1 до 40 проектов в корзину');
+    const roots = new Map();
+    for (const item of selections) {
+      if (!KINDS[item.kind]?.type) throw new Error('Для сохранений доступен импорт папки');
+      validId(item.projectId); if (item.versionId) validId(item.versionId);
+      if (roots.has(item.projectId)) throw new Error('Этот проект уже есть в корзине');
+      if (item.kind === 'mods' && instance.loader === 'vanilla') throw new Error('Для модов нужна сборка с Fabric, Forge или NeoForge');
+      roots.set(item.projectId, item);
+    }
     const manifest = await this.manifest(instance);
     const installed = [];
     for (const item of manifest.items) {
@@ -250,11 +272,16 @@ class ContentManager {
       if (!projects.has(id)) { const project = await this.cached('/project/' + validId(id)); validId(project.id); projects.set(id, project); }
       return projects.get(id);
     };
-    const resolve = async (id, exactVersion = '', dependency = false) => {
+    const resolve = async (id, exactVersion = '', dependency = false, preview = false) => {
       const project = await getProject(id);
+      const choice = roots.get(id) || roots.get(project.id);
+      if (choice) {
+        if (exactVersion && choice.versionId && exactVersion !== choice.versionId) throw new Error('Зависимости требуют другую версию «' + project.title + '». Измените её в корзине');
+        exactVersion = choice.versionId || exactVersion; preview = choice.preview === true; dependency = false;
+      }
       const targetKind = projectKind(project.project_type);
       if (!targetKind) throw new Error('Неподдерживаемый тип зависимости: ' + project.title);
-      if (!dependency && targetKind !== kind) throw new Error('Проект относится к другому разделу');
+      if (choice && targetKind !== choice.kind) throw new Error('Проект относится к другому разделу');
       if (nodes.has(project.id)) {
         if (exactVersion && nodes.get(project.id).version.id !== exactVersion) throw new Error('Зависимости требуют разные версии «' + project.title + '». Установка не изменена');
         return project.id;
@@ -262,8 +289,8 @@ class ContentManager {
       let version;
       const existing = installed.find(item => item.projectId === project.id && (!exactVersion || item.versionId === exactVersion));
       if (existing && dependency) version = await this.cached('/version/' + validId(existing.versionId));
-      if (!version || !compatible(version, instance, targetKind)) version = exactVersion ? await this.cached('/version/' + validId(exactVersion)) : (await this.versions(instance, targetKind, project.id, options.preview))[0];
-      if (!version || version.project_id !== project.id || !compatible(version, instance, targetKind)) throw new Error('Нет совместимой версии «' + project.title + '» для Minecraft ' + instance.minecraftVersion + ' / ' + instance.loader + (options.preview ? '' : '. Можно проверить Beta / Alpha'));
+      if (!version || !compatible(version, instance, targetKind)) version = exactVersion ? await this.cached('/version/' + validId(exactVersion)) : (await this.versions(instance, targetKind, project.id, preview))[0];
+      if (!version || version.project_id !== project.id || !compatible(version, instance, targetKind)) throw new Error('Нет совместимой версии «' + project.title + '» для Minecraft ' + instance.minecraftVersion + ' / ' + instance.loader + (preview ? '' : '. Можно проверить Beta / Alpha'));
       validId(version.id);
       if (nodes.size >= 60) throw new Error('Слишком много зависимостей в одной установке');
       const file = version.files?.find(file => file.primary && !file.file_type?.includes('sources')) || version.files?.find(file => !['sources-jar', 'dev-jar', 'javadoc-jar', 'signature'].includes(file.file_type));
@@ -278,11 +305,11 @@ class ContentManager {
         let requiredId = requirement.project_id;
         if (!requiredId && requirement.version_id) requiredId = (await this.cached('/version/' + validId(requirement.version_id))).project_id;
         if (!requiredId) throw new Error('У «' + project.title + '» есть внешняя обязательная зависимость: ' + (requirement.file_name || 'без ссылки на проект'));
-        node.dependencies.push(await resolve(requiredId, requirement.version_id || '', true));
+        node.dependencies.push(await resolve(requiredId, requirement.version_id || '', true, preview));
       }
       return project.id;
     };
-    await resolve(projectId, options.versionId || '');
+    for (const item of roots.values()) await resolve(item.projectId, item.versionId || '', false, item.preview === true);
     for (const existing of installed.filter(item => !item.file.endsWith('.disabled') && !nodes.has(item.projectId))) {
       const incompatible = existing.incompatibilities || (await this.cached('/version/' + validId(existing.versionId))).dependencies?.filter(dep => dep.dependency_type === 'incompatible').map(dep => ({ projectId: dep.project_id, versionId: dep.version_id })) || [];
       if (incompatible.some(dep => [...nodes.values()].some(node => dep.versionId ? dep.versionId === node.version.id : dep.projectId === node.project.id))) throw new Error('«' + existing.title + '» несовместим с одним из добавляемых проектов');
@@ -308,7 +335,14 @@ class ContentManager {
     const token = randomUUID();
     if (this.plans.size > 30) this.plans.clear();
     this.plans.set(token, { instanceId: instance.id, fingerprint: JSON.stringify(manifest), minecraft: instance.minecraftVersion, loader: instance.loader, nodes: [...nodes.values()], createdAt: Date.now() });
-    return { token, title: projects.get(projectId)?.title || [...nodes.values()][0].project.title, versions: (await this.versions(instance, kind, projectId, options.preview)).slice(0, 80).map(version => ({ id: version.id, name: version.version_number, channel: version.version_type })), entries: [...nodes.values()].map(node => ({ projectId: node.project.id, title: node.project.title, version: node.version.version_number, kind: node.kind, dependency: node.dependency, installed: node.installed, disabled: node.disabled, updating: Boolean(node.old && !node.installed), size: node.installed ? 0 : node.file.size })), totalBytes: [...nodes.values()].reduce((total, node) => total + (node.installed ? 0 : node.file.size), 0) };
+    const first = selections[0];
+    return {
+      token,
+      title: selections.length === 1 ? projects.get(first.projectId)?.title || [...nodes.values()][0].project.title : 'Корзина · ' + selections.length + ' проектов',
+      versions: selections.length === 1 ? (await this.versions(instance, first.kind, first.projectId, first.preview)).slice(0, 80).map(version => ({ id: version.id, name: version.version_number, channel: version.version_type })) : [],
+      entries: [...nodes.values()].map(node => ({ projectId: node.project.id, versionId: node.version.id, title: node.project.title, icon: safeIcon(node.project.icon_url), version: node.version.version_number, kind: node.kind, dependency: node.dependency, installed: node.installed, disabled: node.disabled, updating: Boolean(node.old && !node.installed), size: node.installed ? 0 : node.file.size })),
+      totalBytes: [...nodes.values()].reduce((total, node) => total + (node.installed ? 0 : node.file.size), 0),
+    };
   }
   async download(file, destination, signal, onBytes) {
     const url = new URL(file.url);
@@ -331,12 +365,13 @@ class ContentManager {
     if (JSON.stringify(data) !== plan.fingerprint) throw new Error('Содержимое изменилось. Проверьте зависимости заново');
     const stageRoot = await this.storage(instance, '.veyra-content-staging');
     const stage = await plainDirectory(path.join(stageRoot, randomUUID()), true);
-    const changes = [];
     const backups = [];
+    const transaction = new ContentTransaction(instance.directory, path.basename(stage));
     const total = plan.nodes.reduce((sum, node) => sum + (node.installed ? 0 : node.file.size), 0);
     let completed = 0;
-    let preserveBackups = false;
+    this.activeTransactions.add(instance.id);
     try {
+      await transaction.begin();
       for (const [index, node] of plan.nodes.entries()) {
         signal.throwIfAborted();
         report({ phase: 'Загрузка', message: node.project.title, completed, total, fileIndex: index + 1, fileCount: plan.nodes.length });
@@ -353,14 +388,13 @@ class ContentManager {
         if (node.old) {
           const previous = (await this.entry(instance, node.kind, node.old.file)).file;
           const backup = path.join(stage, 'old-' + node.project.id);
-          await fs.rename(previous, backup);
+          await transaction.move(previous, backup);
           backups.push({ previous, backup });
           if (node.installed) await fs.copyFile(backup, path.join(stage, node.project.id));
         }
         const target = path.join(root, safeName(node.file.filename));
         if (await exists(target)) throw new Error('Файл появился во время загрузки: ' + node.file.filename);
-        await fs.rename(path.join(stage, node.project.id), target);
-        changes.push(target);
+        await transaction.move(path.join(stage, node.project.id), target);
       }
       for (const node of plan.nodes) {
         data.items = data.items.filter(item => item.projectId !== node.project.id);
@@ -374,18 +408,21 @@ class ContentManager {
         const trash = await this.storage(instance, '.veyra-content-trash');
         const id = randomUUID();
         const archived = path.join(trash, id);
-        await fs.rename(backup.backup, archived);
+        await transaction.move(backup.backup, archived);
         backup.backup = archived;
         data.trash.push({ id, kind: node.kind, name: enabledFile(node.old.file) + '.disabled', title: node.old.title + ' · прежняя версия', removedAt: Date.now(), item: null });
       }
+      data.transactionId = transaction.data.id;
       await this.save(instance, data);
+      await transaction.finish();
       return { added: plan.nodes.filter(node => !node.installed || node.disabled).length, dependencies: plan.nodes.filter(node => node.dependency).length };
     } catch (error) {
-      for (const file of changes.reverse()) await fs.rm(file, { force: true }).catch(() => { preserveBackups = true; });
-      for (const { previous, backup } of backups.reverse()) if (await exists(backup)) await fs.rename(backup, previous).catch(() => { preserveBackups = true; });
-      if (preserveBackups) throw new Error('Не удалось полностью восстановить файлы после сбоя. Резервные копии сохранены в .veyra-content-staging и .veyra-content-trash внутри сборки. ' + error.message, { cause: error });
+      try {
+        if (transaction.started) await transaction.recover();
+        else await fs.rm(stage, { recursive: true, force: true });
+      } catch (recoveryError) { throw new Error('Не удалось полностью восстановить файлы после сбоя. Резервные копии сохранены в .veyra-content-staging и .veyra-content-trash внутри сборки. ' + recoveryError.message + ' ' + error.message, { cause: error }); }
       throw error;
-    } finally { if (!preserveBackups) await fs.rm(stage, { recursive: true, force: true }); }
+    } finally { this.activeTransactions.delete(instance.id); }
   }
 }
 module.exports = { ContentManager, KINDS, safeName, compatible };

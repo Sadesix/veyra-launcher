@@ -39,7 +39,7 @@
   }
   async function action(callback) {
     try { return await callback(); }
-    catch (error) { notice(friendlyError(error)); return null; }
+    catch (error) { const form = [...document.querySelectorAll('dialog[open]')].at(-1)?.querySelector('form'); if (form) window.veyraValidation.alert(form, friendlyError(error)); else notice(friendlyError(error)); return null; }
   }
   function showView(view) {
     hideContextMenu();
@@ -497,6 +497,8 @@
   function showDialog(dialog) {
     clearTimeout(dialog.closeTimer);
     dialog.classList.remove('is-closing');
+    for (const input of dialog.querySelectorAll('[aria-invalid]')) window.veyraValidation.clear(input);
+    dialog.querySelector('.form-alert')?.setAttribute('hidden', '');
     if (!dialog.open) dialog.showModal();
   }
   function closeDialog(dialog) {
@@ -800,6 +802,8 @@
     if (!state.data) return;
     state.loaderRequest++;
     el('create-form').reset();
+    el('create-name').placeholder = suggestedName();
+    setText('create-name-hint', 'Если оставить пустым: ' + suggestedName());
     state.loader = 'vanilla';
     state.versionKind = 'release';
     state.versionLimit = 24;
@@ -886,7 +890,7 @@
     el('studio-error').hidden = true;
   }
   function renderStudioText() {
-    setText('instance-dialog-title', el('edit-name').value.trim() || 'Без названия');
+    setText('instance-dialog-title', el('edit-name').value.trim() || suggestedName(state.editingId));
     setText('studio-note-preview', el('edit-note').value);
     const memory = el('edit-memory-default').checked ? state.data.settings.memoryGb : el('edit-memory').value;
     setText('studio-memory-preview', memory + ' ГБ памяти');
@@ -895,6 +899,11 @@
   async function studioAction(callback) {
     try { el('studio-error').hidden = true; return await callback(); }
     catch (error) { setText('studio-error', friendlyError(error)); el('studio-error').hidden = false; return null; }
+  }
+  function suggestedName(excludeId = '') {
+    const used = new Set(instances().filter(item => item.id !== excludeId).map(item => item.name.toLocaleLowerCase('ru')));
+    let number = 1, name = 'Сборка'; while (used.has(name.toLocaleLowerCase('ru'))) name = 'Сборка ' + ++number;
+    return name;
   }
   function renderAccentOptions() {
     for (const button of document.querySelectorAll('[data-accent]')) {
@@ -905,6 +914,7 @@
     const item = selected();
     if (!item) return;
     finishNameTyping(item.name);
+    window.veyraValidation.clear(el('hero-rename-input'));
     el('hero-rename-input').value = item.name;
     el('hero-title-line').hidden = true;
     el('hero-rename-form').hidden = false;
@@ -1336,6 +1346,7 @@
       button.addEventListener('click', () => { el('memory-gb').value = button.dataset.memory; el('memory-range').value = button.dataset.memory; });
     }
     el('save-settings').addEventListener('click', async () => {
+      if (!window.veyraValidation.validate(el('settings-page'))) return;
       const saved = await action(() => api.saveSettings({
         playerName: el('player-name').value.trim(),
         allowAnySymbols: el('settings-any-symbols').checked,

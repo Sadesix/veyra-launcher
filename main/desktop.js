@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, safeStorage, screen, shell } = require('electron');
 const { createHash, randomUUID } = require('node:crypto');
 const fs = require('node:fs/promises');
 const os = require('node:os');
@@ -18,6 +18,8 @@ const { observeOutput, cleanOutput } = require('./install-output');
 const { ContentManager, KINDS } = require('./content-manager');
 const { backgrounds, validBackground, randomBackground } = require('./backgrounds');
 const { DiscordPresence } = require('./discord-presence');
+const { CartStore } = require('./cart-store');
+const { buildName } = require('./build-name');
 const microsoftConfig = require('./microsoft-config.json');
 
 if (process.env.VEYRA_TEST_DATA_DIR) app.setPath('userData', path.resolve(process.env.VEYRA_TEST_DATA_DIR));
@@ -43,6 +45,10 @@ let accountRevision = 0;
 let accountRefreshPromise = null;
 const microsoft = new MicrosoftAuth();
 const content = new ContentManager({ version: app.getVersion() });
+const carts = new CartStore(path.join(app.getPath('userData'), 'content-carts.json'));
+let savedWindow = {};
+let windowSaveQueue = Promise.resolve();
+let windowSaveTimer;
 const discord = new DiscordPresence({ onStatus: () => { if (settings) broadcast({ type: 'discord', status: discord.status }); } });
 
 const dataDir = () => app.getPath('userData');
@@ -193,6 +199,7 @@ async function readyMarker(instance) {
 }
 
 async function loadState() {
+  savedWindow = await readJson(path.join(dataDir(), 'window-state.json'), {});
   const saved = await readJson(settingsFile(), {});
   settings = defaultSettings();
   settings.allowAnySymbols = saved.allowAnySymbols === true;
@@ -534,7 +541,8 @@ async function refreshVersions() {
 
 async function createInstance(input) {
   if (activeOperation) throw new Error('Дождитесь окончания установки');
-  if (!input || !validName(input.name)) throw new Error('Название: от 2 до 40 символов');
+  if (!input || typeof input !== 'object') throw new Error('Не удалось прочитать параметры сборки');
+  buildName(input.name, settings.instances);
   if (!validVersion(input.minecraftVersion)) throw new Error('Выберите версию Minecraft');
   if (!manifest.versions.some((version) => version.id === input.minecraftVersion)) {
     throw new Error('Версия не найдена. Обновите список');
@@ -556,7 +564,7 @@ async function createInstance(input) {
     fs.mkdir(path.join(directory, name), { recursive: true })));
   const instance = sanitizeInstance({
     id,
-    name: input.name,
+    name: buildName(input.name, settings.instances),
     minecraftVersion: input.minecraftVersion,
     loader,
     loaderVersion,
@@ -586,8 +594,7 @@ async function updateInstance(id, patch) {
   if (!patch || typeof patch !== 'object') throw new Error('Некорректные настройки сборки');
   const next = { ...instance };
   if (patch.name !== undefined) {
-    if (!validName(patch.name)) throw new Error('Название: от 2 до 40 символов');
-    next.name = patch.name.trim();
+    next.name = buildName(patch.name, settings.instances, id);
   }
   if (patch.memoryGb !== undefined) {
     if (patch.memoryGb !== null && (!Number.isInteger(Number(patch.memoryGb)) || Number(patch.memoryGb) < 1 || Number(patch.memoryGb) > maxMemoryGb())) {
@@ -747,6 +754,7 @@ async function installInstance(id) {
   emitState();
   status('Устанавливаем «' + instance.name + '»');
   try {
+    await content.recover(instance);
     if (!instance.legacy) {
       await fs.rm(path.join(instance.directory, '.veyra-instance-ready.json'), { force: true });
     }
@@ -820,6 +828,7 @@ async function launchInstance(id) {
   if (authController) throw new Error('Завершите Microsoft-вход или отмените его перед запуском');
   const operation = beginOperation('launch', id);
   try {
+    await content.recover(instance);
     const version = await Version.parse(instance.directory, instance.versionId);
     const java = await resolveJava(
       version,
@@ -1076,6 +1085,15 @@ function registerIpc() {
   ipcMain.handle('launcher:content-categories', (_event, kind) => content.categories(kind));
   ipcMain.handle('launcher:search-content', (_event, id, kind, options) => content.search(requireInstance(id), kind, options));
   ipcMain.handle('launcher:plan-content', (_event, id, kind, projectId, options) => content.plan(requireInstance(id), kind, projectId, options));
+  ipcMain.handle('launcher:get-cart', (_event, id) => { requireInstance(id); return carts.get(id); });
+  ipcMain.handle('launcher:save-cart', (_event, id, selected) => { requireInstance(id); if (activeOperation) throw new Error('Дождитесь завершения текущей операции'); return carts.set(id, selected); });
+  ipcMain.handle('launcher:plan-cart', async (_event, id) => content.planBatch(requireInstance(id), await carts.get(id)));
+  ipcMain.handle('launcher:install-cart', (_event, id) => changeContent(id, 'Установка корзины', async (instance, operation) => {
+    const plan = await content.planBatch(instance, await carts.get(id));
+    const result = await content.install(instance, plan.token, operation.signal, value => progress(value));
+    try { await carts.set(id, []); } catch { result.warning = 'Файлы установлены, но не удалось очистить сохранённую корзину. Очистите её вручную'; }
+    return result;
+  }, true));
   ipcMain.handle('launcher:install-content', (_event, id, token) => changeContent(id, 'Установка из Modrinth', (instance, operation) => content.install(instance, token, operation.signal, value => progress(value)), true));
   ipcMain.handle('launcher:toggle-content', (_event, id, kind, name, enabled) => changeContent(id, enabled ? 'Включение' : 'Отключение', instance => content.toggle(instance, kind, name, Boolean(enabled))));
   ipcMain.handle('launcher:trash-content', (_event, id, kind, name) => changeContent(id, 'Перемещение в корзину', instance => content.trash(instance, kind, name)));
@@ -1105,11 +1123,28 @@ function registerIpc() {
   ipcMain.handle('launcher:window-close', () => { window?.close(); return true; });
 }
 
+function captureWindowState() {
+  if (window && !window.isDestroyed() && !window.isMinimized()) {
+    savedWindow = { ...window.getNormalBounds(), maximized: window.isMaximized() };
+  }
+}
+function saveWindowState() {
+  clearTimeout(windowSaveTimer);
+  captureWindowState();
+  const snapshot = { ...savedWindow };
+  windowSaveQueue = windowSaveQueue.catch(() => {}).then(() => atomicJson(path.join(dataDir(), 'window-state.json'), snapshot));
+  return windowSaveQueue;
+}
 function createWindow() {
   const acrylic = process.platform === 'win32' && Number(os.release().split('.')[2]) >= 22621;
+  const valid = Number.isInteger(savedWindow.width) && savedWindow.width >= 980 && Number.isInteger(savedWindow.height) && savedWindow.height >= 650;
+  const area = screen.getDisplayMatching(valid && Number.isInteger(savedWindow.x) && Number.isInteger(savedWindow.y) ? savedWindow : screen.getPrimaryDisplay().workArea).workArea;
+  const width = valid ? Math.min(savedWindow.width, Math.max(980, area.width)) : 1460;
+  const height = valid ? Math.min(savedWindow.height, Math.max(650, area.height)) : 900;
   window = new BrowserWindow({
-    width: 1460,
-    height: 900,
+    width,
+    height,
+    ...(valid && Number.isInteger(savedWindow.x) && Number.isInteger(savedWindow.y) ? { x: Math.max(area.x, Math.min(savedWindow.x, area.x + area.width - width)), y: Math.max(area.y, Math.min(savedWindow.y, area.y + area.height - height)) } : {}),
     minWidth: 980,
     minHeight: 650,
     show: false,
@@ -1125,6 +1160,9 @@ function createWindow() {
       sandbox: true,
     },
   });
+  if (savedWindow.maximized === true) window.maximize();
+  for (const event of ['resize', 'move', 'maximize', 'unmaximize']) window.on(event, () => { captureWindowState(); clearTimeout(windowSaveTimer); windowSaveTimer = setTimeout(() => saveWindowState().catch(error => log('Размер окна: ' + errorMessage(error))), 300); });
+  window.on('close', () => saveWindowState().catch(error => log('Размер окна: ' + errorMessage(error))));
   window.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   window.once('ready-to-show', () => window.show());
   window.on('closed', () => { window = null; });
@@ -1156,6 +1194,8 @@ app.whenReady().then(async () => {
   });
   await fs.mkdir(dataDir(), { recursive: true });
   await loadState();
+  const recovered = await Promise.allSettled(settings.instances.map(instance => content.recover(instance)));
+  for (const result of recovered) if (result.status === 'rejected') log('Восстановление содержимого: ' + errorMessage(result.reason));
   accountVault = new AccountVault(path.join(dataDir(), 'microsoft-session.bin'), safeStorage);
   accountSession = await accountVault.read();
   if (accountSession?.clientId !== microsoftClientId()) accountSession = null;
@@ -1177,9 +1217,9 @@ let finishingQuit = false;
 app.on('before-quit', (event) => {
   discord.dispose();
   authController?.abort();
-  if (!gameProcess || finishingQuit) return;
+  if (finishingQuit) return;
   event.preventDefault();
   finishingQuit = true;
-  settlePlaytime(gameProcess);
-  persist().catch((error) => log('История игры: ' + errorMessage(error))).finally(() => app.quit());
+  if (gameProcess) settlePlaytime(gameProcess);
+  Promise.allSettled([saveWindowState(), settings ? persist() : Promise.resolve(), carts.queue]).finally(() => app.quit());
 });

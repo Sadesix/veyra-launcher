@@ -179,7 +179,8 @@ async function main() {
     assert.equal(installed.instances[0].installed, true);
     assert.equal(installed.installConsole.outcome, 'success');
     assert.ok(installed.installConsole.lines.some(line => line.source === 'stderr'));
-    await page.locator('#console-close').click();
+    const consoleCross = await page.locator('#console-close').boundingBox(); assert.ok(consoleCross.width >= 44 && consoleCross.height >= 44);
+    await page.locator('#console-close').click({ position: { x: 3, y: 3 } });
     await page.locator('#install-scroll').waitFor({ state: 'hidden' });
     await page.locator('#console-footer').click();
     assert.ok(await page.locator('#install-scroll').isVisible());
