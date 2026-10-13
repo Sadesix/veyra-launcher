@@ -36,3 +36,25 @@ button:hover svg[data-motion=refresh] { transform: rotate(155deg); }
 @keyframes bagSwing { 0% { transform: rotate(0); } 30% { transform: rotate(-12deg); } 65% { transform: rotate(8deg); } 100% { transform: rotate(-3deg); } }
 @keyframes layerFloat { 0% { transform: translateY(0); } 45% { transform: translateY(-4px) scale(1.09); } 100% { transform: translateY(-1px); } }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+.sessions-panel { width: min(760px,calc(100vw - 100px)); padding: 24px; }
+.sessions-panel h2 { margin: 0; font-size: 23px; }
+.sessions-build { color: #b1a0c4; font-size: 12px; margin: 12px 0 22px; }
+.sessions-section { padding: 18px; border: 1px solid #b798dc20; border-radius: 15px; background: #ffffff02; margin: 12px 0; }
+.sessions-section-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.sessions-section h3 { margin: 0; font-size: 14px; }
+.sessions-section p,.sessions-section small,#sessions-list { font-size: 11px; color: #a99ab9; line-height: 1.7; }
+.sessions-section > small { display: block; margin-top: 13px; }
+.client-session { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px solid #ffffff09; }
+.client-session strong,.client-session small { display: block; }
+.client-session strong { color: #e3d5f4; }
+.server-status { font-size: 10px; color: #b79ae0; max-width: 50%; text-align: right; }
+.server-address { display: flex; flex-wrap: wrap; gap: 15px; align-items: center; margin: 14px 0; padding: 12px; background: #05050966; border-radius: 9px; }
+.server-address code { margin-right: auto; color: #d4b7ff; user-select: text; }
+#server-network-addresses { user-select: text; overflow-wrap: anywhere; }
+.server-controls { display: flex; flex-wrap: wrap; gap: 9px; margin: 16px 0; }
+.server-controls .button { min-height: 38px; padding: 0 14px; font-size: 11px; }
+#server-log { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 10px/1.7 Consolas,monospace; background: #080810; border-radius: 10px; padding: 12px; color: #aab2c7; user-select: text; }
+#server-skipped { font-size: 11px; color: #d2b7a1; margin: 14px 0; }
+#server-skipped-list { padding-left: 18px; overflow-wrap: anywhere; max-height: 130px; overflow: auto; }
+#hero-multi,#hero-server { min-height: 44px; font-size: 11px; padding: 0 14px; }
+.hero-actions { flex-wrap: wrap; }

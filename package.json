@@ -1,6 +1,6 @@
 {
   "name": "veyra-launcher",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "private": true,
   "description": "Veyra Launcher — современный лаунчер Minecraft Java Edition для Windows",
   "main": "main/desktop.js",

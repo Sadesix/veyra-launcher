@@ -102,6 +102,8 @@
                 <p id="hero-description">Отдельная папка игры готова к вашей сборке.</p>
                 <div class="hero-actions">
                   <button class="button button-primary hero-main-button" type="button" id="main-action"><svg class="icon" id="main-action-icon"><use href="#i-download"/></svg><span id="main-action-label">Установить</span></button>
+                  <button class="button button-secondary" type="button" id="hero-multi" title="Запустить ещё один клиент"><svg class="icon"><use href="#i-plus"/></svg>Клиент</button>
+                  <button class="button button-secondary" type="button" id="hero-server"><svg class="icon"><use href="#i-terminal"/></svg>Сервер</button>
                   <button class="button-icon hero-utility" type="button" id="hero-folder" title="Открыть папку" aria-label="Открыть папку"><svg class="icon"><use href="#i-folder"/></svg></button>
                   <button class="button-icon hero-utility" type="button" id="hero-content" title="Моды и содержимое сборки" aria-label="Содержимое сборки"><svg class="icon"><use href="#i-puzzle"/></svg></button>
                   <button class="button-icon hero-utility" type="button" id="hero-console" title="Консоль установки" aria-label="Консоль установки" hidden><svg class="icon"><use href="#i-terminal"/></svg></button><button class="button-icon hero-utility" type="button" id="hero-edit" title="Настройки сборки" aria-label="Настройки сборки"><svg class="icon"><use href="#i-settings"/></svg></button>
@@ -150,7 +152,7 @@
         </section>
       </main>
 
-      <footer class="footerbar"><span class="footer-brand">veyra <b id="app-version">0.6.1</b></span><span class="footer-status"><i></i><span id="footer-message">Готовим лаунчер…</span></span><button class="stop-game-footer" id="stop-game-footer" type="button" hidden><svg class="icon"><use href="#i-stop"/></svg><span id="stop-game-footer-label">Остановить игру</span></button><button class="console-footer" id="console-footer" type="button" hidden><svg class="icon"><use href="#i-terminal"/></svg>Консоль установки</button><span class="footer-right" id="footer-instance-count">0 сборок</span></footer>
+      <footer class="footerbar"><span class="footer-brand">veyra <b id="app-version">0.7.0</b></span><span class="footer-status"><i></i><span id="footer-message">Готовим лаунчер…</span></span><button class="stop-game-footer" id="stop-game-footer" type="button" hidden><svg class="icon"><use href="#i-stop"/></svg><span id="stop-game-footer-label">Остановить игру</span></button><button class="console-footer" id="console-footer" type="button" hidden><svg class="icon"><use href="#i-terminal"/></svg>Консоль установки</button><span class="footer-right" id="footer-instance-count">0 сборок</span></footer>
     </div>
   </div>
 
@@ -234,8 +236,20 @@
     <aside class="content-plan" id="content-plan" hidden aria-labelledby="content-plan-title"><div class="content-plan-head"><div><span class="eyebrow">ВЕРСИЯ И ЗАВИСИМОСТИ</span><h3 id="content-plan-title">Проверяем зависимости…</h3></div><button class="button-icon" type="button" id="content-plan-close" aria-label="Закрыть план установки"><svg class="icon"><use href="#i-close"/></svg></button></div><label class="content-preview-toggle switch-field"><input id="content-preview" type="checkbox" role="switch" /><span class="switch-track"></span><span>Включить Beta / Alpha</span></label><label class="form-field content-version-field"><span>Совместимая версия</span><select id="content-version"></select></label><p class="content-plan-error" id="content-plan-error" role="alert" hidden></p><div class="content-plan-entries" id="content-plan-entries"></div><p class="content-plan-explanation">Добавьте проект в корзину и продолжайте выбирать. Всё скачается одной пачкой, когда будете готовы.</p><div class="content-plan-bottom"><span id="content-plan-size"></span><button class="button button-primary" type="button" id="content-plan-install" disabled><svg class="icon"><use href="#i-bag"/></svg><span>В корзину</span></button></div></aside>
   </dialog>
   <dialog id="save-rename-dialog" class="modal modal-small"><form id="save-rename-form"><div class="modal-head"><h2>Название папки сохранения</h2><button type="button" class="modal-close" data-close="save-rename-dialog" aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div><label class="form-field"><span>Новое название</span><input id="save-rename-input" type="text" maxlength="140" required /></label><p class="profile-hint">Имя внутри Minecraft остаётся прежним; здесь меняется папка сохранения.</p><div class="modal-actions"><button class="button button-primary" type="submit">Сохранить</button></div></form></dialog>
+  <dialog id="sessions-dialog" class="modal sessions-panel" aria-labelledby="sessions-title">
+    <header class="modal-head"><h2 id="sessions-title">Клиенты и сервер</h2><button class="modal-close" type="button" data-close="sessions-dialog" aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
+    <p class="sessions-build" id="sessions-build"></p>
+    <section class="sessions-section"><div class="sessions-section-head"><h3>Запущенные клиенты</h3><button class="text-button" id="sessions-add" type="button">+ Ещё клиент</button></div><div id="sessions-list"></div><small>Дополнительные клиенты получают отдельные папки и разные локальные ники. Основные сохранения остаются в сборке.</small></section>
+    <section class="sessions-section"><div class="sessions-section-head"><h3>Сервер сборки</h3><span class="server-status" id="server-state">Остановлен</span></div><p>Та же версия и загрузчик, отдельная папка и свои сохранения. Привязка: <strong>0.0.0.0:25565</strong>. Локальные ники, без проверки Microsoft.</p><p id="server-network-addresses"></p>
+      <div class="server-address"><code>127.0.0.1:25565</code><button class="text-button" id="server-copy" type="button">Копировать</button><button class="text-button" id="server-folder" type="button">Папка</button></div>
+      <label class="switch-field" id="server-eula-row"><input id="server-eula" type="checkbox" role="switch"/><span class="switch-track"></span><span>Принимаю <button class="text-button" id="server-eula-link" type="button">Minecraft EULA</button></span></label>
+      <div class="server-controls"><button class="button button-primary" id="server-start" type="button">Запустить сервер</button><button class="button button-secondary" id="server-join" type="button" hidden>Клиент → сервер</button><button class="button button-danger" id="server-stop" type="button" hidden>Остановить</button><button class="text-button" id="server-force" type="button" hidden>Принудительно</button><button class="text-button" id="server-cancel" type="button" hidden>Отменить подготовку</button></div>
+      <p id="sessions-error" class="content-error" role="alert" hidden></p><details id="server-skipped" hidden><summary id="server-skipped-title"></summary><ul id="server-skipped-list"></ul></details><pre id="server-log" tabindex="0" aria-label="Журнал сервера">Здесь появится вывод сервера.</pre>
+    </section>
+  </dialog>
   <script src="./validation.js"></script>
   <script src="./renderer.js"></script>
   <script src="./content.js"></script>
+  <script src="./sessions.js"></script>
 </body>
 </html>

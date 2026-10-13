@@ -206,7 +206,7 @@
       ? new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' }).format(new Date(item.lastPlayedAt))
       : '—');
     const operation = state.data.operation;
-    const running = state.data.runningInstanceId === item.id;
+    const running = (state.data.runningClients || []).some(run => run.instanceId === item.id);
     const stopping = running && state.data.stoppingGame;
     const working = operation?.instanceId === item.id;
     setText('main-action-label', working ? (operation.type === 'launch' ? 'Запускаем…' : operation.type === 'content' ? 'Меняем содержимое…' : 'Устанавливаем…') :
@@ -214,7 +214,8 @@
     el('main-action-icon').querySelector('use').setAttribute('href', '#i-' + (running ? 'stop' : (item.installed ? 'play' : 'download')));
     el('main-action').classList.toggle('button-danger', running);
     el('main-action').classList.toggle('button-primary', !running);
-    el('main-action').disabled = Boolean(operation || stopping || (state.data.runningInstanceId && !running));
+    el('main-action').disabled = Boolean(operation || stopping || (!item.installed && (state.data.runningInstanceId || state.data.server?.pid && !['stopped','error'].includes(state.data.server.status))));
+    el('hero-multi').disabled = Boolean(operation || !item.installed);
     el('hero-edit').disabled = working;
     el('hero-console').hidden = state.data.installConsole?.instanceId !== item.id;
     const box = el('progress-box');
@@ -308,7 +309,7 @@
     el('stop-game-footer').hidden = !running;
     el('stop-game-footer').disabled = Boolean(state.data.stoppingGame);
     el('stop-game-footer').title = running ? 'Завершить процесс: ' + running.name : '';
-    setText('stop-game-footer-label', state.data.stoppingGame ? 'Останавливаем…' : 'Остановить игру');
+    setText('stop-game-footer-label', state.data.stoppingGame ? 'Останавливаем…' : state.data.runningClients?.length > 1 ? 'Остановить все · ' + state.data.runningClients.length : 'Остановить игру');
     renderHero();
     renderCards();
     renderInstallConsole();
@@ -726,11 +727,11 @@
     heading.textContent = item?.name || 'Библиотека';
     menu.append(heading);
     const entries = item ? [
-      [state.data.runningInstanceId === id ? 'stop' : item.installed ? 'play' : 'download', state.data.runningInstanceId === id ? 'Остановить игру' : item.installed ? 'Играть' : 'Установить', async () => {
+      [(state.data.runningClients || []).some(run => run.instanceId === id) ? 'stop' : item.installed ? 'play' : 'download', (state.data.runningClients || []).some(run => run.instanceId === id) ? 'Остановить клиентов' : item.installed ? 'Играть' : 'Установить', async () => {
         await api.selectInstance(id); showView('home');
-        if (state.data.runningInstanceId === id) await api.stopGame();
+        if ((state.data.runningClients || []).some(run => run.instanceId === id)) await api.stopGame('', id);
         else if (item.installed) await launchWithScene(item); else await api.installInstance(id);
-      }, Boolean(state.data.operation || state.data.stoppingGame || state.data.runningInstanceId && state.data.runningInstanceId !== id)],
+      }, Boolean(state.data.operation || state.data.stoppingGame)],
       ['edit', 'Переименовать', async () => { await api.selectInstance(id); showView('home'); openQuickRename(); }],
       ['image', 'Сменить обложку', () => api.setInstanceCover(id), Boolean(item.legacy)],
       ['puzzle', 'Моды и содержимое', () => window.dispatchEvent(new CustomEvent('veyra:content-open', { detail: { id } }))],
@@ -1177,7 +1178,7 @@
     el('main-action').addEventListener('click', () => {
       const item = selected();
       if (item) {
-        if (state.data.runningInstanceId === item.id) action(() => api.stopGame());
+        if ((state.data.runningClients || []).some(run => run.instanceId === item.id)) action(() => api.stopGame('', item.id));
         else if (item.installed) launchWithScene(item);
         else action(() => api.installInstance(item.id));
       }
@@ -1186,6 +1187,7 @@
     el('launch-stage-dismiss').addEventListener('click', hideLaunchStage);
     el('hero-folder').addEventListener('click', () => { const item = selected(); if (item) action(() => api.openInstanceFolder(item.id)); });
     el('hero-content').addEventListener('click', () => { const item = selected(); if (item) window.dispatchEvent(new CustomEvent('veyra:content-open', { detail: { id: item.id } })); });
+    el('hero-multi').addEventListener('click', () => { const item = selected(); if (item) launchWithScene(item); });
     el('hero-edit').addEventListener('click', () => openEdit(selected()));
     el('hero-rename').addEventListener('click', openQuickRename);
     el('hero-rename-cancel').addEventListener('click', closeQuickRename);

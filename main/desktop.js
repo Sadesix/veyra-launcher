@@ -20,9 +20,14 @@ const { backgrounds, validBackground, randomBackground } = require('./background
 const { DiscordPresence } = require('./discord-presence');
 const { CartStore } = require('./cart-store');
 const { buildName } = require('./build-name');
+const { clientFolder, clientName, trackClient, releaseClient } = require('./client-sessions');
+const { ServerManager, portFree } = require('./server-manager');
 const microsoftConfig = require('./microsoft-config.json');
 
 if (process.env.VEYRA_TEST_DATA_DIR) app.setPath('userData', path.resolve(process.env.VEYRA_TEST_DATA_DIR));
+const primaryLauncher = app.requestSingleInstanceLock();
+if (!primaryLauncher) app.quit();
+app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
 protocol.registerSchemesAsPrivileged([{ scheme: 'veyra', privileges: { secure: true, standard: true, supportFetchAPI: true } }]);
 
 let window;
@@ -30,6 +35,7 @@ let settings;
 let manifest = { latest: {}, versions: [] };
 let activeOperation = null;
 let gameProcess = null;
+const games = new Map();
 let refreshPromise = null;
 let javaCandidates = [];
 let saveQueue = Promise.resolve();
@@ -50,6 +56,7 @@ let savedWindow = {};
 let windowSaveQueue = Promise.resolve();
 let windowSaveTimer;
 const discord = new DiscordPresence({ onStatus: () => { if (settings) broadcast({ type: 'discord', status: discord.status }); } });
+const server = new ServerManager({ onChange: () => { if (settings) emitState(); } });
 
 const dataDir = () => app.getPath('userData');
 const settingsFile = () => path.join(dataDir(), 'settings.json');
@@ -282,6 +289,8 @@ function publicState() {
       cancellable: activeOperation.type === 'install' || Boolean(activeOperation.cancellable),
     } : null,
     runningInstanceId: gameProcess?.instanceId || null,
+    runningClients: [...games.values()].map(run => ({ id: run.id, instanceId: run.instanceId, pid: run.child.pid, name: run.name, directory: run.directory, memoryGb: run.memoryGb, startedAt: run.startedAt, stopping: run.stopping })),
+    server: server.state,
     stoppingGame: Boolean(gameProcess?.stopping),
     runningSession: gameProcess ? { instanceId: gameProcess.instanceId, accountedAt: gameProcess.accountedAt, startedAt: gameProcess.startedAt } : null,
     installConsole,
@@ -496,7 +505,7 @@ async function runTask(task, operation, label, onUpdate) {
 
 function beginOperation(type, instanceId) {
   if (activeOperation) throw new Error('Дождитесь окончания текущей операции');
-  if (gameProcess) throw new Error('Сначала закройте запущенную игру');
+  if ((games.size || server.run) && !['launch', 'server'].includes(type)) throw new Error('Остановите клиенты и сервер перед изменением файлов сборки');
   const controller = new AbortController();
   activeOperation = { id: randomUUID(), type, instanceId, controller, signal: controller.signal, task: null };
   if (type === 'install') installConsole = { id: activeOperation.id, instanceId, live: true, outcome: '', startedAt: Date.now(), sequence: 0, lines: [] };
@@ -678,7 +687,7 @@ async function resetInstanceCover(id) {
 
 async function removeInstance(id) {
   const instance = requireInstance(id);
-  if (activeOperation?.instanceId === id || gameProcess?.instanceId === id) {
+  if (activeOperation?.instanceId === id || [...games.values()].some(run => run.instanceId === id) || server.run && server.state.instanceId === id) {
     throw new Error('Сначала завершите установку или игру');
   }
   const target = path.resolve(instance.directory);
@@ -822,12 +831,16 @@ function offlineUuid(name) {
   return bytes.toString('hex');
 }
 
-async function launchInstance(id) {
+async function launchInstance(id, connect = false) {
   const instance = requireInstance(id);
   if (!instance.installed) throw new Error('Сначала установите сборку');
   if (authController) throw new Error('Завершите Microsoft-вход или отмените его перед запуском');
   const operation = beginOperation('launch', id);
+  let directory = '';
   try {
+    if (connect && (!server.run || server.state.status !== 'ready' || server.state.instanceId !== id)) throw new Error('Сначала запустите сервер этой сборки и дождитесь готовности');
+    const memoryGb = instance.memoryGb || settings.memoryGb;
+    ensureMemory(memoryGb);
     await content.recover(instance);
     const version = await Version.parse(instance.directory, instance.versionId);
     const java = await resolveJava(
@@ -839,7 +852,10 @@ async function launchInstance(id) {
     );
     const identity = settings.accountMode === 'microsoft'
       ? await microsoftIdentity(operation.signal)
-      : { gameProfile: { name: settings.playerName, id: offlineUuid(settings.playerName) }, accessToken: '0', userType: 'legacy' };
+      : (() => { const name = clientName(settings.playerName, [...games.values()].map(run => run.name), settings.allowAnySymbols); return { gameProfile: { name, id: offlineUuid(name) }, accessToken: '0', userType: 'legacy' }; })();
+    if (identity.accessToken !== '0' && [...games.values()].some(run => run.profileId === identity.gameProfile.id)) throw new Error('Этот Microsoft-профиль уже используется клиентом. Для второго нужен другой профиль');
+    const runId = randomUUID();
+    directory = await clientFolder(instance, [...games.values()].some(run => run.instanceId === id));
     const extraJVMArgs = javaArguments();
     if (instance.loader === 'neoforge' && instance.loaderVersion === '26.3.0.56-beta') {
       const source = path.join(__dirname, '..', 'assets', 'compat', 'neoforge-version-guard.jar');
@@ -851,8 +867,10 @@ async function launchInstance(id) {
     }
     progress({ phase: 'Запуск', completed: 0, total: 0, message: 'Запускаем Minecraft' }, true);
     const child = await launch({
-      gamePath: instance.directory,
+      gamePath: directory,
       resourcePath: instance.directory,
+      ...(connect ? (/^1\.(?:[0-9]|1[0-9])(?:\.|$)/.test(instance.minecraftVersion) ? { server: { ip: '127.0.0.1', port: 25565 } } : { quickPlayMultiplayer: '127.0.0.1:25565' }) : {}),
+      nativeRoot: path.join(directory, '.veyra-natives', runId),
       javaPath: java.path,
       version,
       ...identity,
@@ -861,13 +879,17 @@ async function launchInstance(id) {
       signal: operation.signal,
       spawn: (...args) => {
         operation.signal.throwIfAborted();
-        return require('node:child_process').spawn(...args);
+        const child = require('node:child_process').spawn(...args);
+        try { trackClient(directory, child.pid); } catch (error) { child.kill(); throw error; }
+        child.once('close', () => releaseClient(directory).catch(error => log('Папка клиента: ' + errorMessage(error))));
+        return child;
       },
-      maxMemory: (instance.memoryGb || settings.memoryGb) * 1024,
+      maxMemory: memoryGb * 1024,
       launcherName: 'Veyra Launcher',
       extraExecOption: { windowsHide: true },
     });
-    const run = { child, instanceId: id, stopping: false, stoppedByUser: false, startedAt: Date.now(), accountedAt: Date.now(), settled: false };
+    const run = { id: runId, child, instanceId: id, directory, memoryGb, name: identity.gameProfile.name, profileId: identity.gameProfile.id, stopping: false, stoppedByUser: false, startedAt: Date.now(), accountedAt: Date.now(), settled: false };
+    games.set(runId, run);
     gameProcess = run;
     run.timer = setInterval(() => {
       accountPlaytime(run);
@@ -884,7 +906,7 @@ async function launchInstance(id) {
       if (identity.accessToken !== '0') message = message.split(identity.accessToken).join('[защищено]');
       if (!message) return;
       recentOutput = (recentOutput + '\n' + message).slice(-40000);
-      log('[' + instance.name + '] ' + message);
+      log('[' + instance.name + ' · ' + run.name + '] ' + message);
       broadcast({ type: 'log', message: message.slice(-1500), instanceId: id });
     };
     child.stdout?.on('data', onOutput);
@@ -892,18 +914,18 @@ async function launchInstance(id) {
     child.once('error', (error) => {
       settlePlaytime(run);
       reportError('Minecraft', error);
-      if (gameProcess?.child === child) gameProcess = null;
+      games.delete(run.id); gameProcess = [...games.values()].at(-1) || null;
       emitState();
     });
     child.once('close', async (code, signal) => {
       settlePlaytime(run);
-      if (gameProcess?.child === child) gameProcess = null;
+      games.delete(run.id); gameProcess = [...games.values()].at(-1) || null;
       emitState();
       if (run.stoppedByUser) status('Игра остановлена');
       else if (code === 0) status('Minecraft закрыт');
       else {
         const message = diagnoseFailure(recentOutput, code, signal);
-        const reportRoot = path.join(instance.directory, 'crash-reports');
+        const reportRoot = path.join(directory, 'crash-reports');
         const entries = await fs.readdir(reportRoot, { withFileTypes: true }).catch(() => []);
         const reports = await Promise.all(entries.filter((entry) => entry.isFile() && entry.name.endsWith('.txt')).map(async (entry) => {
           const file = path.join(reportRoot, entry.name);
@@ -920,8 +942,9 @@ async function launchInstance(id) {
     await persist().catch((error) => log('Не удалось сохранить историю запуска: ' + errorMessage(error)));
     emitState();
     if (gameProcess?.child === child) status('Minecraft запущен: ' + instance.name, 'success');
-    return { pid: child.pid || null };
+    return { pid: child.pid || null, id: run.id, name: run.name, directory };
   } catch (error) {
+    if (directory && ![...games.values()].some(run => run.directory === directory)) await releaseClient(directory).catch(() => {});
     reportError('Не удалось запустить игру', error);
     throw error;
   } finally { endOperation(operation); }
@@ -931,20 +954,25 @@ function accountPlaytime(run) {
   if (run.settled) return;
   const now = Date.now();
   const item = settings.instances.find((entry) => entry.id === run.instanceId);
-  if (item) item.playedMs += Math.max(0, now - run.accountedAt);
+  const first = [...games.values()].find(other => other.instanceId === run.instanceId && !other.settled);
+  if (item && (!first || first === run)) item.playedMs += Math.max(0, now - run.accountedAt);
   run.accountedAt = now;
 }
 
 function settlePlaytime(run) {
   if (run.settled) return;
+  const leader = [...games.values()].find(other => other.instanceId === run.instanceId && !other.settled);
+  if (leader && leader !== run) accountPlaytime(leader);
   accountPlaytime(run);
   run.settled = true;
+  for (const other of games.values()) if (other.instanceId === run.instanceId) other.accountedAt = Date.now();
   clearInterval(run.timer);
   persist().catch((error) => log('История игры: ' + errorMessage(error)));
 }
 
-async function stopGame() {
-  const run = gameProcess;
+async function stopGame(runId = '', instanceId = '') {
+  if (!runId) { const selected = [...games.values()].filter(run => !instanceId || run.instanceId === instanceId); await Promise.all(selected.map(run => stopGame(run.id))); return selected.length > 0; }
+  const run = games.get(runId);
   if (!run) return false;
   if (run.stopping) return true;
   run.stopping = true;
@@ -960,6 +988,28 @@ async function stopGame() {
     emitState();
     throw error;
   }
+}
+
+function ensureMemory(requested) {
+  const used = [...games.values()].reduce((sum, run) => sum + run.memoryGb, 0) + (server.run ? server.state.memoryGb : 0);
+  if (used + requested > maxMemoryGb()) throw new Error('Клиентам и серверу уже выделено ' + used + ' ГБ. Для запуска нужно ещё ' + requested + ' ГБ; доступно ' + Math.max(0, maxMemoryGb() - used) + '. Уменьшите память в настройках или остановите процесс');
+}
+async function startServer(id, acceptEula) {
+  const instance = requireInstance(id), metadata = manifest.versions.find(item => item.id === instance.minecraftVersion);
+  if (!metadata) throw new Error('Обновите список версий Minecraft');
+  if (server.run) throw new Error('Сервер уже запущен');
+  await portFree(25565);
+  const memoryGb = Math.min(4, instance.memoryGb || settings.memoryGb);
+  ensureMemory(memoryGb);
+  const operation = beginOperation('server', id); operation.cancellable = true;
+  try {
+    await content.recover(instance);
+    const requirements = await fetchRequirements(metadata, operation.signal);
+    const java = await resolveJava({ javaVersion: { majorVersion: requirements.major, component: requirements.component } }, instance.javaPath || settings.javaPath, dataDir(), progress, operation.signal);
+    progress({ phase: 'Сервер', message: 'Готовим локальный сервер на 25565', completed: 0, total: 0 }, true);
+    return await server.start(instance, metadata, java.path, memoryGb, acceptEula === true, operation.signal);
+  } catch (error) { if (operation.signal.aborted) { status('Подготовка сервера отменена'); return server.state; } reportError('Сервер', error); throw error; }
+  finally { endOperation(operation); }
 }
 
 async function getLogs() {
@@ -1052,8 +1102,14 @@ function registerIpc() {
   ipcMain.handle('launcher:reset-instance-cover', (_event, id) => resetInstanceCover(id));
   ipcMain.handle('launcher:remove-instance', (_event, id) => removeInstance(id));
   ipcMain.handle('launcher:install-instance', (_event, id) => installInstance(id));
-  ipcMain.handle('launcher:launch-instance', (_event, id) => launchInstance(id));
-  ipcMain.handle('launcher:stop-game', () => stopGame());
+  ipcMain.handle('launcher:launch-instance', (_event, id, connect) => launchInstance(id, connect === true));
+  ipcMain.handle('launcher:stop-game', (_event, runId, instanceId) => stopGame(runId, instanceId));
+  ipcMain.handle('launcher:start-server', (_event, id, accepted) => startServer(id, accepted));
+  ipcMain.handle('launcher:stop-server', (_event, force) => server.stop(force === true));
+  ipcMain.handle('launcher:copy-server-address', () => { clipboard.writeText('127.0.0.1:25565'); return true; });
+  ipcMain.handle('launcher:open-server-folder', async (_event, id) => { const directory = path.join(requireInstance(id).directory, '.veyra-server'); await fs.mkdir(directory, { recursive: true }); return shell.openPath(directory); });
+  ipcMain.handle('launcher:server-eula', async (_event, id) => /(?:^|\n)eula\s*=\s*true/.test(await fs.readFile(path.join(requireInstance(id).directory, '.veyra-server', 'eula.txt'), 'utf8').catch(() => '')));
+  ipcMain.handle('launcher:open-server-eula', () => shell.openExternal('https://www.minecraft.net/eula'));
   ipcMain.handle('launcher:cancel-operation', async () => {
     if (!activeOperation || !(activeOperation.type === 'install' || activeOperation.cancellable)) return false;
     activeOperation.controller.abort();
@@ -1163,6 +1219,14 @@ function createWindow() {
   if (savedWindow.maximized === true) window.maximize();
   for (const event of ['resize', 'move', 'maximize', 'unmaximize']) window.on(event, () => { captureWindowState(); clearTimeout(windowSaveTimer); windowSaveTimer = setTimeout(() => saveWindowState().catch(error => log('Размер окна: ' + errorMessage(error))), 300); });
   window.on('close', () => saveWindowState().catch(error => log('Размер окна: ' + errorMessage(error))));
+  let closingServer = false;
+  window.on('close', event => {
+    if (!server.run) return;
+    event.preventDefault();
+    if (closingServer) return;
+    closingServer = true;
+    server.stop().then(stopped => { closingServer = false; if (stopped) window?.close(); else { status('Сервер не ответил на stop. Откройте панель сервера и повторите остановку либо завершите принудительно', 'error'); window?.show(); } });
+  });
   window.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   window.once('ready-to-show', () => window.show());
   window.on('closed', () => { window = null; });
@@ -1178,7 +1242,7 @@ function applyWindowAppearance(value) {
   if (supported) window.setBackgroundMaterial(glass ? 'acrylic' : 'none');
 }
 
-app.whenReady().then(async () => {
+if (primaryLauncher) app.whenReady().then(async () => {
   protocol.handle('veyra', async (request) => {
     try {
       const url = new URL(request.url);
@@ -1215,11 +1279,13 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => app.quit());
 let finishingQuit = false;
 app.on('before-quit', (event) => {
+  if (!primaryLauncher) return;
   discord.dispose();
   authController?.abort();
+  if (activeOperation?.type === 'server') activeOperation.controller.abort();
   if (finishingQuit) return;
   event.preventDefault();
   finishingQuit = true;
-  if (gameProcess) settlePlaytime(gameProcess);
-  Promise.allSettled([saveWindowState(), settings ? persist() : Promise.resolve(), carts.queue]).finally(() => app.quit());
+  for (const run of games.values()) settlePlaytime(run);
+  Promise.allSettled([saveWindowState(), settings ? persist() : Promise.resolve(), carts.queue, server.stop()]).finally(() => app.quit());
 });

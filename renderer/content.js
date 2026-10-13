@@ -11,7 +11,7 @@
   const bytes = size => size == null ? 'Папка' : size < 1024 ? size + ' Б' : size < 1024 ** 2 ? Math.round(size / 1024) + ' КБ' : (size / 1024 ** 2).toFixed(1) + ' МБ';
   const node = (tag, className, text) => { const value = document.createElement(tag); if (className) value.className = className; if (text !== undefined) value.textContent = text; return value; };
   const icon = name => { const value = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); value.classList.add('icon'); value.dataset.motion = name; const use = document.createElementNS(value.namespaceURI, 'use'); use.setAttribute('href', '#i-' + name); value.append(use); return value; };
-  const locked = () => s.working || Boolean(s.data?.operation || s.data?.runningInstanceId);
+  const locked = () => s.working || Boolean(s.data?.operation || s.data?.runningInstanceId || s.data?.server?.pid && !['stopped','error'].includes(s.data.server.status));
   function error(message, plan = false) { const target = el(plan ? 'content-plan-error' : 'content-error'); target.textContent = String(message || '').replace(/^Error invoking remote method '[^']+': (?:Error: )?/, ''); target.hidden = !message; }
   function notify(message, undo) {
     let undone = false;
