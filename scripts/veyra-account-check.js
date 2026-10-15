@@ -9,7 +9,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const { createHash, randomBytes } = require('node:crypto');
 const { _electron: electron } = require('playwright-core');
 
-// Аккаунт Veyra в лаунчере целиком: настоящий сервер аккаунтов (site/api на встроенном сервере PHP в копии сайта),
+// Аккаунт Veyra в лаунчере целиком: настоящий сервер аккаунтов (api/ закрытого репозитория сайта на встроенном сервере PHP в копии сайта),
 // поддельный authlib-injector с локального адреса (VEYRA_AUTHLIB_URL/VEYRA_AUTHLIB_SHA256) и Electron с отдельной папкой данных.
 // Вкладки профиля с клавиатуры, регистрация и вход через окно профиля, русские ошибки, паузы после 429 отдельно у регистрации
 // и у каждого ника, скин через veyra:// с CORS, модель и удаление, восстановление зашифрованной сессии, аргументы игры и сервера
@@ -71,6 +71,8 @@ function skinPng({ skin, hair, eyes, shirt, pants, slim = false }) {
 }
 
 async function main() {
+  // Сервер аккаунтов — часть закрытого репозитория сайта (папка site рядом с лаунчером); в открытой копии его нет.
+  if (!fs.existsSync(path.join(workspace, 'site', 'api', 'index.php'))) { process.stdout.write('SKIP: нет папки site с сервером аккаунтов (закрытый репозиторий Sadesix/veyra-site) — аккаунт Veyra в лаунчере не проверен.\n'); return; }
   const probe = spawnSync(PHP, ['-v'], { encoding: 'utf8' });
   if (probe.error || probe.status !== 0) { process.stdout.write('SKIP: PHP не найден — аккаунт Veyra в лаунчере не проверен. Укажите путь к php.exe в переменной PHP_BINARY.\n'); return; }
   const phpVersion = probe.stdout.split('\n')[0].split(' ').slice(0, 2).join(' ');
