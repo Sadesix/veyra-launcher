@@ -9,3 +9,5 @@ site/inc/config.php
 site/data/
 site/latest.json
 site/*.zip
+# Архивы в корне проекта (тестовые сборки) не публикуются.
+/*.zip

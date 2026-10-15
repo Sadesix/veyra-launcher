@@ -24,8 +24,9 @@
     "check:updates": "node scripts/update-check.js",
     "check:installer": "node scripts/installer-check.js",
     "check:site": "node scripts/site-check.js && node scripts/site-php-check.js",
-    "release": "npm run dist && node scripts/publish.js",
-    "release:upload": "node scripts/publish.js"
+    "release": "npm run dist && node scripts/publish.js && node scripts/github-release.js",
+    "release:upload": "node scripts/publish.js",
+    "release:github": "node scripts/github-release.js"
   },
   "dependencies": {
     "@xmcl/core": "2.15.1",
@@ -60,5 +61,7 @@
       "target": "dir"
     },
     "artifactName": "Veyra-Launcher-${version}-${arch}.${ext}"
-  }
+  },
+  "license": "MIT",
+  "homepage": "https://veyra-launcher.com"
 }

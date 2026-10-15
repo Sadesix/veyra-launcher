@@ -1,4 +1,10 @@
+<p align="center"><img src="assets/veyra-logo.png" width="240" alt="Veyra" /></p>
+
 # Veyra Launcher
+
+**Скачать:** [последний установщик](https://github.com/Sadesix/veyra-launcher/releases/latest/download/Veyra-Launcher-Setup.exe) · [все версии](https://github.com/Sadesix/veyra-launcher/releases) · [veyra-launcher.com](https://veyra-launcher.com)  
+**Сообщество:** [Telegram](https://t.me/veyra_launcher) · [Discord](https://veyra-launcher.com/discord)  
+**Лицензия:** [MIT](LICENSE) — код можно читать, собирать и менять. Шрифты, логотипы загрузчиков и товарный знак Minecraft принадлежат своим владельцам (см. конец файла).
 
 Veyra — лаунчер Minecraft Java Edition для Windows. Интерфейс собран из блоков, как меню самой игры: пиксельный шрифт, рамки-картины, слоты и хотбар внизу окна. Сборки, сервер, достижения и настройки находятся в одной рабочей области.
 
@@ -180,3 +186,11 @@ Veyra — лаунчер Minecraft Java Edition для Windows. Интерфей
 Шрифт заголовков — [Monocraft](https://github.com/IdreesInc/Monocraft) Идриса Хассана, лицензия SIL Open Font License 1.1; текст лицензии лежит рядом со шрифтом в assets/fonts. Шрифт подписей — DotumChe RUS от hidsky (assets/fonts/DotumChe-RUS.ttf). Шрифты не связаны с Mojang и Microsoft.
 
 Логотипы в выборе загрузчика: Minecraft — pack.png из официальной версии игры; Fabric — [сайт FabricMC](https://github.com/FabricMC/fabricmc.net/blob/main/assets/logo.png); NeoForge и Forge — официальные аватары [NeoForged](https://github.com/neoforged) и [MinecraftForge](https://github.com/MinecraftForge). Их использование не означает поддержку или одобрение лаунчера этими проектами.
+
+## Выпуски
+
+`npm run release` собирает установщик, выкладывает его на сайт (`scripts/publish.js`) и создаёт выпуск на GitHub (`scripts/github-release.js`): тег `v<версия>` на текущем коммите, установщик и его копия **Veyra-Launcher-Setup.exe** — по ссылке `releases/latest/download/Veyra-Launcher-Setup.exe` всегда скачивается последняя версия. Выпуск на GitHub требует закоммиченного кода и выполненного `gh auth login`; повторить только его — `npm run release:github`.
+
+authlib-injector ([yushijinhun/authlib-injector](https://github.com/yushijinhun/authlib-injector), AGPL-3.0) в репозиторий не входит: лаунчер скачивает официальный файл при первом входе с аккаунтом Veyra и сверяет его SHA-256.
+
+NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.
