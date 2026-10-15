@@ -2,7 +2,7 @@
   'use strict';
   const api = window.launcher, el = id => document.getElementById(id);
   const loaderNames = { vanilla: 'Vanilla', fabric: 'Fabric', neoforge: 'NeoForge', forge: 'Forge' };
-  const defaults = { levelName: 'world', seed: '', gamemode: 'survival', difficulty: 'normal', hardcore: false, allowFlight: false, maxPlayers: 8, viewDistance: 10, motd: '', port: 25565, memoryGb: null };
+  const defaults = { levelName: 'world', seed: '', gamemode: 'survival', difficulty: 'normal', hardcore: false, allowFlight: false, maxPlayers: 8, viewDistance: 10, motd: '', port: 25565, memoryGb: null, veyraLogin: false };
   const statusNames = { preparing: 'Подготовка', starting: 'Запускается', ready: 'Готов', stopping: 'Сохраняем и останавливаем', stopped: 'Остановлен', error: 'Ошибка' };
   let data, id = '', busy = false, forceArmed = false, config = { ...defaults }, loading = 0, history = [], historyIndex = 0, logText = null;
   const clean = text => String(text || '').replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
@@ -44,12 +44,13 @@
     el('server-view-distance').value = config.viewDistance;
     el('server-hardcore').checked = config.hardcore;
     el('server-flight').checked = config.allowFlight;
+    el('server-veyra-login').checked = config.veyraLogin;
     for (const input of el('server-builder').querySelectorAll('[aria-invalid]')) window.veyraValidation.clear(input);
   }
   function read() {
     return { ...config, levelName: el('server-level-name').value.trim(), seed: el('server-seed').value.trim(), motd: el('server-motd').value.trim(),
       port: Number(el('server-port').value), maxPlayers: Number(el('server-max-players').value), viewDistance: Number(el('server-view-distance').value),
-      hardcore: el('server-hardcore').checked, allowFlight: el('server-flight').checked };
+      hardcore: el('server-hardcore').checked, allowFlight: el('server-flight').checked, veyraLogin: el('server-veyra-login').checked };
   }
 
   function renderBuilds(locked) {
@@ -149,7 +150,7 @@
     el('server-card-icon').style.backgroundImage = item.coverUrl ? 'url("' + item.coverUrl + '")' : '';
     el('server-card-name').textContent = item.name;
     el('server-card-motd').textContent = shown.motd || 'A Minecraft Server';
-    el('server-card-meta').textContent = loaderNames[item.loader] + ' · Minecraft ' + item.minecraftVersion + ' · мир «' + (shown.levelName || 'world') + '»';
+    el('server-card-meta').textContent = loaderNames[item.loader] + ' · Minecraft ' + item.minecraftVersion + ' · мир «' + (shown.levelName || 'world') + '»' + (shown.veyraLogin ? ' · вход через Veyra' : '');
     el('server-card-players').textContent = own && live ? (server.players || []).length : 0;
     el('server-card-max').textContent = shown.maxPlayers || defaults.maxPlayers;
     el('server-ping').dataset.status = status;
@@ -176,6 +177,8 @@
     }
     renderMemory(item);
     el('server-view-value').textContent = el('server-view-distance').value + ' чанков';
+    const veyraLogin = own && live ? Boolean(server.config?.veyraLogin) : el('server-veyra-login').checked;
+    el('server-auth-note').textContent = veyraLogin ? 'Вход через Veyra: зайдут только игроки с аккаунтом Veyra, их скины видны всем. Режим и сложность применяются при запуске.' : 'Локальные ники без проверки аккаунта. Режим и сложность применяются при запуске.';
     el('server-start').disabled = busy || Boolean(data.operation) || !el('server-eula').checked;
     el('server-reset').disabled = busy;
 
@@ -186,11 +189,20 @@
     el('server-force').hidden = !own || server?.status !== 'stopping';
     el('server-cancel').hidden = data.operation?.type !== 'server';
     el('server-join').hidden = !own || server?.status !== 'ready'; el('server-join').disabled = busy || Boolean(data.operation);
+    // Сервер со входом через Veyra пускает только аккаунты Veyra: подсказка заранее говорит, с каким профилем зайдёт клиент.
+    const veyraOnly = Boolean(own && live && server.config?.veyraLogin);
+    el('server-join').dataset.tip = veyraOnly ? 'Вход через Veyra' : 'Клиент → сервер';
+    el('server-join').dataset.tipLore = veyraOnly ? (data.account.mode === 'veyra' ? 'Зайдёт аккаунт ' + data.account.name : 'Сначала выберите аккаунт Veyra в профиле') : 'Ещё один клиент сразу подключится к серверу';
     const commands = own && ['starting', 'ready'].includes(server?.status);
     el('server-command-form').hidden = el('server-quick').hidden = !(own && live);
     el('server-command').disabled = el('server-command-send').disabled = !commands;
     for (const button of el('server-quick').children) button.disabled = !commands || busy;
-    el('sessions-add').disabled = busy || Boolean(data.operation) || !item.installed;
+    // Аккаунт Veyra играет только в одном клиенте: дополнительные клиенты — с локальным ником.
+    const veyraMode = data.account.mode === 'veyra', veyraBusy = veyraMode && data.account.veyraPlaying;
+    el('sessions-add').disabled = busy || Boolean(data.operation) || !item.installed || veyraBusy;
+    if (veyraBusy) { el('sessions-add').dataset.tip = 'Аккаунт Veyra уже в игре'; el('sessions-add').dataset.tipLore = 'Для второго клиента выберите в профиле локальный ник'; }
+    else { delete el('sessions-add').dataset.tip; delete el('sessions-add').dataset.tipLore; }
+    el('sessions-note').textContent = veyraMode ? 'Аккаунт Veyra играет только в одном клиенте. Для дополнительных клиентов выберите в профиле локальный ник.' : 'Дополнительные клиенты получают отдельные папки и разные локальные ники.';
     renderLog(server, own);
     renderPeople(server, own);
     el('server-skipped').hidden = !own || !server?.skipped?.length;

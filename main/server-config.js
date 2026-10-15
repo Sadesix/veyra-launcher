@@ -1,6 +1,6 @@
 const GAMEMODES = ['survival', 'creative', 'adventure', 'spectator'];
 const DIFFICULTIES = ['peaceful', 'easy', 'normal', 'hard'];
-const DEFAULT_SERVER = Object.freeze({ levelName: 'world', seed: '', gamemode: 'survival', difficulty: 'normal', hardcore: false, allowFlight: false, maxPlayers: 8, viewDistance: 10, motd: '', port: 25565, memoryGb: null });
+const DEFAULT_SERVER = Object.freeze({ levelName: 'world', seed: '', gamemode: 'survival', difficulty: 'normal', hardcore: false, allowFlight: false, maxPlayers: 8, viewDistance: 10, motd: '', port: 25565, memoryGb: null, veyraLogin: false });
 const numbers = { maxPlayers: [1, 100, 'Игроков: от 1 до 100'], viewDistance: [2, 32, 'Дальность прорисовки: от 2 до 32 чанков'], port: [1024, 65535, 'Порт: от 1024 до 65535'] };
 const texts = { seed: [64, 'Сид: до 64 символов в одну строку'], motd: [59, 'Описание: до 59 символов в одну строку'] };
 
@@ -22,7 +22,7 @@ function serverConfig(value, { strict = false, maxMemoryGb = 64 } = {}) {
   }
   if (source.gamemode !== undefined) { if (GAMEMODES.includes(source.gamemode)) result.gamemode = source.gamemode; else refuse('Неизвестный режим игры'); }
   if (source.difficulty !== undefined) { if (DIFFICULTIES.includes(source.difficulty)) result.difficulty = source.difficulty; else refuse('Неизвестная сложность'); }
-  for (const key of ['hardcore', 'allowFlight']) if (source[key] !== undefined) { if (typeof source[key] === 'boolean') result[key] = source[key]; else refuse('Некорректный переключатель сервера'); }
+  for (const key of ['hardcore', 'allowFlight', 'veyraLogin']) if (source[key] !== undefined) { if (typeof source[key] === 'boolean') result[key] = source[key]; else refuse('Некорректный переключатель сервера'); }
   for (const [key, [min, max, message]] of Object.entries(numbers)) {
     if (source[key] === undefined) continue;
     if (Number.isInteger(source[key]) && source[key] >= min && source[key] <= max) result[key] = source[key];
@@ -40,11 +40,14 @@ const escapeValue = value => String(value).replace(/\\/g, '\\\\').replace(/^ /, 
 const unescapeValue = value => value.replace(/\\u([0-9a-fA-F]{4})|\\(.)/g, (_match, code, plain) => code ? String.fromCharCode(parseInt(code, 16)) : plain);
 
 function serverProperties(config, port) {
+  // С 26.3 сервер по умолчанию включает белый список и не пускает даже владельца: лаунчер его выключает при каждом запуске.
   const values = {
-    'server-port': port, 'server-ip': '0.0.0.0', 'online-mode': 'false', 'enable-rcon': 'false', 'enable-query': 'false',
+    'server-port': port, 'server-ip': '0.0.0.0', 'online-mode': 'false', 'white-list': 'false', 'enable-rcon': 'false', 'enable-query': 'false',
     'level-name': config.levelName, gamemode: config.gamemode, difficulty: config.difficulty, hardcore: config.hardcore,
     'allow-flight': config.allowFlight, 'max-players': config.maxPlayers, 'view-distance': config.viewDistance,
   };
+  // Вход через Veyra: игроков проверяет сервер аккаунтов Veyra (authlib-injector), а ключей подписи чата у этих аккаунтов нет.
+  if (config.veyraLogin) { values['online-mode'] = 'true'; values['enforce-secure-profile'] = 'false'; }
   // Пустые описание и сид оставляют значения, которые уже записал сервер или владелец.
   if (config.motd) values.motd = config.motd;
   if (config.seed) values['level-seed'] = config.seed;

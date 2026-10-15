@@ -32,8 +32,9 @@ async function clientFolder(instance, additional) {
   return directory;
 }
 // data — отпечаток папки данных лаунчера: у копии Veyra с другой папкой могут быть сборки с теми же id.
-function clientMarker({ data, run, instance, folder = '', name, profile, memory, started }) {
-  return MARKER + Buffer.from(JSON.stringify({ v: 1, data, run, instance, folder, name, profile, memory, started }), 'utf8').toString('base64url');
+// veyra — SHA-256 токена аккаунта Veyra, с которым играет клиент: пока клиент жив, выход из аккаунта не отзывает этот токен.
+function clientMarker({ data, run, instance, folder = '', name, profile, memory, started, veyra = '' }) {
+  return MARKER + Buffer.from(JSON.stringify({ v: 1, data, run, instance, folder, name, profile, memory, started, ...(veyra ? { veyra } : {}) }), 'utf8').toString('base64url');
 }
 function readMarker(value) {
   try {
@@ -42,6 +43,7 @@ function readMarker(value) {
     if (info.folder !== '' && !ID.test(info.folder)) return null;
     if (typeof info.name !== 'string' || !info.name || info.name.length > 64 || typeof info.profile !== 'string' || info.profile.length > 64) return null;
     if (!Number.isInteger(info.memory) || info.memory < 1 || info.memory > 1024 || !Number.isFinite(info.started)) return null;
+    if (info.veyra !== undefined && (typeof info.veyra !== 'string' || !/^[0-9a-f]{64}$/.test(info.veyra))) return null;
     return info;
   } catch { return null; }
 }

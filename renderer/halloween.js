@@ -30,19 +30,30 @@
     MOON.forEach((row, y) => [...row].forEach((tone, x) => { if (tone !== '.') cells += '<rect x="' + x + '" y="' + y + '" width="1" height="1"' + (tone === 'o' ? ' class="crater"' : '') + '/>'; }));
     return '<svg class="spooky-moon" viewBox="0 0 16 16" aria-hidden="true">' + cells + '</svg>';
   }
+  // Паутина — веер из шести лучей и четырёх провисших колец в углу рисунка 120 × 120.
+  const RAYS = [0, 18, 36, 54, 72, 90].map(angle => [Math.cos(angle * Math.PI / 180), Math.sin(angle * Math.PI / 180)]), RINGS = [22, 44, 68, 94];
   function web(className) {
-    const rays = [0, 18, 36, 54, 72, 90].map(angle => [Math.cos(angle * Math.PI / 180), Math.sin(angle * Math.PI / 180)]);
-    let path = rays.map(([x, y]) => 'M0 0L' + (x * 120).toFixed(1) + ' ' + (y * 120).toFixed(1)).join('');
-    for (const radius of [22, 44, 68, 94]) {
-      path += rays.map(([x, y], index) => {
+    let path = RAYS.map(([x, y]) => 'M0 0L' + (x * 120).toFixed(1) + ' ' + (y * 120).toFixed(1)).join('');
+    for (const radius of RINGS) {
+      path += RAYS.map(([x, y], index) => {
         const point = (x * radius).toFixed(1) + ' ' + (y * radius).toFixed(1);
         if (!index) return 'M' + point;
-        const [px, py] = rays[index - 1], sag = radius * .82;
+        const [px, py] = RAYS[index - 1], sag = radius * .82;
         return 'Q' + (((px + x) / 2) * sag).toFixed(1) + ' ' + (((py + y) / 2) * sag).toFixed(1) + ' ' + point;
       }).join('');
     }
     return '<svg class="spooky-web ' + className + '" viewBox="0 0 120 120" aria-hidden="true"><path d="' + path + '"/></svg>';
   }
+  // Паук висит на узле внешнего кольца правой паутины: верх нити привязан к узлу, качается только её длина.
+  // Узел задан в долях стороны рисунка; правая паутина отражена, поэтому x отсчитан от левого края.
+  function corner() {
+    const [x, y] = RAYS[3], knot = '--knot-x:' + (1 - x * RINGS[3] / 120).toFixed(4) + ';--knot-y:' + (y * RINGS[3] / 120).toFixed(4);
+    return '<div class="spooky-corner" style="' + knot + '">' + web('is-right') +
+      '<div class="spooky-drop"><i class="spooky-thread"></i><button class="spooky-spider" type="button" tabindex="-1" aria-label="Паук">' + icon('spider') + '</button></div></div>';
+  }
+  // Мышь — полоска кадров «крылья вверх, середина, вниз, середина»: steps(4) листает их, а тело подпрыгивает в такт взмахам.
+  const BAT = ['bat', 'batmid', 'batdown', 'batmid'];
+  const bat = () => '<span class="bat-sprite"><svg class="icon bat-strip" viewBox="0 0 48 12" aria-hidden="true">' + BAT.map((name, index) => '<use href="#i-' + name + '" x="' + index * 12 + '" width="12" height="12"/>').join('') + '</svg></span>';
 
   // ── Украшения: луна и звёзды позади окна, паутина, паук, туман, мыши и призрак поверх ──
   let back = null, front = null, extras = [], timers = [], spawned = new Set();
@@ -53,14 +64,16 @@
     back.innerHTML = moon() + Array.from({ length: 16 }, (_value, index) => '<i class="spooky-star" style="--x:' + ((index * 37 + 11) % 97) + ';--y:' + ((index * 53 + 7) % 23) + ';--d:' + (index % 7) + '"></i>').join('');
     front = document.createElement('div');
     front.className = 'spooky-front';
-    front.innerHTML = web('is-left') + web('is-right') + '<div class="spooky-fog"><i></i><i></i></div>' +
-      '<button class="spooky-spider" type="button" tabindex="-1" aria-label="Паук"><i></i>' + icon('spider') + '</button>';
+    front.innerHTML = web('is-left') + corner() + '<div class="spooky-fog"><i></i><i></i></div>';
     document.body.append(back, front);
-    front.querySelector('.spooky-spider').addEventListener('click', event => {
-      const spider = event.currentTarget;
-      if (spider.classList.contains('is-climbing')) return;
-      spider.classList.add('is-climbing');
-      setTimeout(() => spider.classList.remove('is-climbing'), 4200);
+    const drop = front.querySelector('.spooky-drop');
+    // Без @property длина нити менялась бы рывками — в таком браузере паук просто висит.
+    if (!window.CSS?.registerProperty) drop.classList.add('is-still');
+    // Испуганный паук сматывает нить и прячется в паутине, а потом снова спускается.
+    drop.querySelector('.spooky-spider').addEventListener('click', () => {
+      if (drop.classList.contains('is-climbing')) return;
+      drop.classList.add('is-climbing');
+      setTimeout(() => drop.classList.remove('is-climbing'), 2900);
     });
     // Тыквы-фонари по краям хотбара и на обложке выбранной сборки.
     const rail = document.querySelector('.icon-rail'), hero = el('hero-card');
@@ -78,7 +91,7 @@
       hero.querySelector('.hero-motes')?.after(scene); extras.push(scene);
     }
     const mark = document.querySelector('.wordmark');
-    if (mark) { const bat = document.createElement('span'); bat.className = 'wordmark-bat'; bat.innerHTML = icon('bat'); mark.append(bat); extras.push(bat); }
+    if (mark) { const perched = document.createElement('span'); perched.className = 'wordmark-bat'; perched.innerHTML = bat(); mark.append(perched); extras.push(perched); }
     if (!calm()) {
       timers.push(setTimeout(() => flock(3), 2500));
       timers.push(setTimeout(ghostLoop, 25000 + Math.random() * 15000));
@@ -95,21 +108,44 @@
     if (!document.hidden) flock(1 + Math.floor(Math.random() * 3));
     timers.push(setTimeout(batLoop, 14000 + Math.random() * 14000));
   }
-  // Мыши летят стайкой по волнистой траектории и машут крыльями; после пролёта элементы удаляются.
+  // Мыши летят стайкой, но у каждой свой размер, частота взмахов и путь; после пролёта элементы удаляются.
   function flock(count) {
     if (!front) return;
     const width = front.clientWidth, height = front.clientHeight, ltr = Math.random() > .5;
     for (let index = 0; index < count; index++) {
-      const bat = document.createElement('span');
-      bat.className = 'spooky-bat';
-      bat.innerHTML = icon('bat');
-      bat.style.setProperty('--size', (18 + Math.round(Math.random() * 3) * 6) + 'px');
-      front.append(bat); spawned.add(bat);
-      const start = 40 + Math.random() * height * .45, lift = 30 + Math.random() * 60, from = ltr ? -60 : width + 60, to = ltr ? width + 60 : -60;
-      const frames = Array.from({ length: 7 }, (_value, step) => ({ transform: 'translate(' + (from + (to - from) * step / 6) + 'px,' + (start + Math.sin(step * 1.3 + index) * lift - step * 6) + 'px)' + (ltr ? '' : ' scaleX(-1)') }));
-      bat.animate(frames, { duration: 6500 + Math.random() * 2500, delay: index * 260, easing: 'linear', fill: 'both' })
-        .finished.catch(() => {}).finally(() => { bat.remove(); spawned.delete(bat); });
+      const flyer = document.createElement('span');
+      flyer.className = 'spooky-bat';
+      flyer.innerHTML = bat();
+      flyer.style.setProperty('--size', (18 + Math.round(Math.random() * 3) * 6) + 'px');
+      flyer.style.setProperty('--flap', Math.round(260 + Math.random() * 140) + 'ms');
+      flyer.style.setProperty('--phase', -Math.round(Math.random() * 400) + 'ms');
+      front.append(flyer); spawned.add(flyer);
+      fly(flyer, ltr ? -60 : width + 60, ltr ? width + 60 : -60, 40 + Math.random() * height * .45, 6500 + Math.random() * 3000, index * 260 + Math.random() * 300);
     }
+  }
+  // Путь — плавная кривая из двух волн с набором высоты. Скорость то растёт, то падает, а иногда мышь
+  // расправляет крылья и планирует вниз: класс is-gliding держит средний кадр, пока она скользит.
+  function fly(flyer, from, to, start, duration, delay) {
+    const steps = 48, rand = (low, high) => low + Math.random() * (high - low), smooth = value => value <= 0 ? 0 : value >= 1 ? 1 : value * value * (3 - 2 * value);
+    const waves = [[rand(14, 40), rand(.6, 1.5), rand(0, 7)], [rand(4, 12), rand(2.2, 3.8), rand(0, 7)]], pace = [rand(1, 2.2), rand(0, 7)];
+    const glide = Math.random() < .65 ? [rand(.2, .62), rand(.1, .18)] : null;
+    // 1 посреди планирования и 0 вне его; края сглажены, чтобы кривая не ломалась.
+    const gliding = t => glide ? smooth((t - glide[0]) / .04) * (1 - smooth((t - glide[0] - glide[1]) / .04)) : 0;
+    const speed = t => (1 + .38 * Math.sin(t * Math.PI * 2 * pace[0] + pace[1])) * (1 + .25 * gliding(t));
+    const travelled = [0];
+    for (let step = 0; step < steps; step++) travelled.push(travelled[step] + speed((step + .5) / steps));
+    const frames = travelled.map((distance, step) => {
+      const t = step / steps, x = from + (to - from) * distance / travelled[steps];
+      const sway = waves.reduce((sum, [amplitude, frequency, phase]) => sum + amplitude * Math.sin(t * Math.PI * 2 * frequency + phase), 0) * (1 - .7 * gliding(t));
+      const sink = glide ? 30 * smooth((t - glide[0]) / glide[1]) : 0;
+      return { transform: 'translate(' + x.toFixed(1) + 'px,' + (start + sway + sink - t * 36).toFixed(1) + 'px)' };
+    });
+    const flight = flyer.animate(frames, { duration, delay, easing: 'linear', fill: 'both' });
+    if (glide) {
+      setTimeout(() => flyer.classList.add('is-gliding'), delay + glide[0] * duration);
+      setTimeout(() => flyer.classList.remove('is-gliding'), delay + (glide[0] + glide[1]) * duration);
+    }
+    flight.finished.catch(() => {}).finally(() => { flyer.remove(); spawned.delete(flyer); });
   }
   function ghostLoop() {
     if (!document.hidden) summonGhost();
@@ -149,11 +185,11 @@
     const stage = document.querySelector('.intro-stage');
     if (!stage || el('intro')?.hidden || calm()) return;
     for (let index = 0; index < 3; index++) {
-      const bat = document.createElement('span');
-      bat.className = 'intro-bat';
-      bat.style.setProperty('--i', index);
-      bat.innerHTML = icon('bat');
-      stage.append(bat); extras.push(bat);
+      const flyer = document.createElement('span');
+      flyer.className = 'intro-bat';
+      flyer.style.setProperty('--i', index);
+      flyer.innerHTML = bat();
+      stage.append(flyer); extras.push(flyer);
     }
   }
 

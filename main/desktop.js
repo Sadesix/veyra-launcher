@@ -8,7 +8,10 @@ const { installBase, installModdedLibraries } = require('./game-install');
 const { fetchLoaderVersions, installLoader, validVersion } = require('./loaders');
 const { requiredJava, resolveJava, scanJava, javaInfo } = require('./java-runtime');
 const { MicrosoftAuth, validClientId } = require('./microsoft-auth');
-const { AccountVault } = require('./account-vault');
+const { AccountVault, validVeyraSession, validVeyraRevokes } = require('./account-vault');
+const { VeyraAccount, VeyraError, apiRoot, checkSkinFile, skinModel, waitText } = require('./veyra-account');
+const { ensureAuthlib } = require('./authlib-injector');
+const accountConfig = require('./account-config.json');
 const { diagnoseFailure } = require('./game-diagnostics');
 const { prechecks, javaArguments } = require('./launch-runtime');
 const { appearance } = require('./appearance');
@@ -31,7 +34,8 @@ if (process.env.VEYRA_TEST_DATA_DIR) app.setPath('userData', path.resolve(proces
 const primaryLauncher = app.requestSingleInstanceLock();
 if (!primaryLauncher) app.quit();
 app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
-protocol.registerSchemesAsPrivileged([{ scheme: 'veyra', privileges: { secure: true, standard: true, supportFetchAPI: true } }]);
+// corsEnabled: трёхмерный просмотр читает пиксели скина veyra://skin/… с CORS, иначе холст считается чужим.
+protocol.registerSchemesAsPrivileged([{ scheme: 'veyra', privileges: { secure: true, standard: true, supportFetchAPI: true, corsEnabled: true } }]);
 
 let window;
 let settings;
@@ -58,6 +62,22 @@ let lastCrash = null;
 let accountRevision = 0;
 let accountRefreshPromise = null;
 const microsoft = new MicrosoftAuth();
+// Аккаунт Veyra: сессия в своём зашифрованном файле, действия с ним идут по очереди.
+let veyraSession = null;
+let veyraVault;
+let veyraRevision = 0;
+let veyraQueue = Promise.resolve();
+// Паузы после ответа 429, как их считает сервер: у регистрации своя, у входа — для каждого ника своя.
+// Ключ 'register' или 'login:<ник в нижнем регистре>' → момент, когда можно попробовать снова.
+const veyraWaits = new Map();
+let veyraMetadataText = '';
+// Токены прежних входов, которые ещё нужно отозвать на сервере: ими играет клиент или сервер не ответил при выходе.
+let revokeVault;
+let veyraRevokes = [];
+let revokeQueue = Promise.resolve();
+// Все токены Veyra, которые видел этот запуск: прежние после обновления тоже скрываются в журнале.
+const veyraSecrets = new Set();
+const veyra = new VeyraAccount({ root: apiRoot(), version: app.getVersion() });
 const content = new ContentManager({ version: app.getVersion() });
 const carts = new CartStore(path.join(app.getPath('userData'), 'content-carts.json'));
 let savedWindow = {};
@@ -103,7 +123,7 @@ function broadcast(payload) {
 
 function redact(message) {
   let safe = String(message);
-  for (const token of [accountSession?.accessToken, accountSession?.refreshToken]) {
+  for (const token of [accountSession?.accessToken, accountSession?.refreshToken, veyraSession?.accessToken, ...veyraSecrets]) {
     if (token) safe = safe.split(token).join('[скрыто]');
   }
   return safe;
@@ -246,7 +266,7 @@ async function loadState() {
   settings.allowAnySymbols = saved.allowAnySymbols === true;
   if (validPlayerName(saved.playerName, settings.allowAnySymbols)) settings.playerName = saved.playerName;
   if (validClientId(saved.microsoftClientId)) settings.microsoftClientId = saved.microsoftClientId;
-  if (saved.accountMode === 'microsoft') settings.accountMode = 'microsoft';
+  if (['microsoft', 'veyra'].includes(saved.accountMode)) settings.accountMode = saved.accountMode;
   if (Number.isInteger(saved.memoryGb) && saved.memoryGb >= 1) settings.memoryGb = Math.min(saved.memoryGb, maxMemoryGb());
   if (typeof saved.javaPath === 'string' && (!saved.javaPath || path.isAbsolute(saved.javaPath))) settings.javaPath = saved.javaPath;
   settings.showSnapshots = Boolean(saved.showSnapshots);
@@ -354,8 +374,13 @@ function publicState() {
     instancesDirectory: instancesDir(),
     account: {
       mode: settings.accountMode,
-      name: settings.accountMode === 'microsoft' ? (accountSession?.profile.name || 'Microsoft') : settings.playerName,
+      name: settings.accountMode === 'microsoft' ? (accountSession?.profile.name || 'Microsoft') : settings.accountMode === 'veyra' && veyraSession ? veyraSession.profile.name : settings.playerName,
       microsoft: accountSession ? { ...accountSession.profile } : null,
+      veyra: veyraSession ? { id: veyraSession.profile.id, name: veyraSession.profile.name, skin: veyraSession.skin ? { url: 'veyra://skin/' + veyraSession.skin.hash, slim: veyraSession.skin.slim } : null } : null,
+      // Аккаунт Veyra уже в игре: второй клиент с ним не запустится.
+      veyraPlaying: Boolean(veyraSession && playingAs(veyraSession.profile.id)),
+      // До этих моментов сервер просит не повторять регистрацию или вход под ником (ответ 429).
+      veyraWait: Object.fromEntries([...veyraWaits].filter(([, until]) => until > Date.now())),
       configured: validClientId(microsoftClientId()),
       clientId: microsoftClientId(),
       auth: { ...authState },
@@ -376,7 +401,7 @@ async function saveMicrosoftClientId(value) {
   if (previous !== effective && accountSession) {
     await accountVault.clear();
     accountSession = null;
-    settings.accountMode = 'local';
+    if (settings.accountMode === 'microsoft') settings.accountMode = 'local';
   }
   accountRevision++;
   settings.microsoftClientId = value.trim();
@@ -386,9 +411,10 @@ async function saveMicrosoftClientId(value) {
 }
 
 async function selectAccount(mode) {
-  if (!['local', 'microsoft'].includes(mode)) throw new Error('Неизвестный профиль');
+  if (!['local', 'microsoft', 'veyra'].includes(mode)) throw new Error('Неизвестный профиль');
   if (activeOperation?.type === 'launch') throw new Error('Дождитесь запуска игры');
   if (mode === 'microsoft' && !accountSession) throw new Error('Сначала войдите в Microsoft');
+  if (mode === 'veyra' && !veyraSession) throw new Error('Сначала войдите в аккаунт Veyra');
   settings.accountMode = mode;
   await persist();
   emitState();
@@ -458,7 +484,7 @@ async function logoutMicrosoft() {
   accountRevision++;
   await accountVault.clear();
   accountSession = null;
-  settings.accountMode = 'local';
+  if (settings.accountMode === 'microsoft') settings.accountMode = 'local';
   authState = { busy: false, phase: '', error: '' };
   await persist();
   emitState();
@@ -487,6 +513,239 @@ async function microsoftIdentity(signal, force = false) {
     session = await accountRefreshPromise;
   }
   return { gameProfile: { ...session.profile }, accessToken: session.accessToken, userType: 'msa' };
+}
+
+// ── Аккаунт Veyra ──────────────────────────────────────────
+const veyraSkinDir = () => path.join(dataDir(), 'veyra-skins');
+const veyraMetadataFile = () => path.join(dataDir(), 'compat', 'veyra-metadata.json');
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+
+function veyraTask(callback) {
+  const task = veyraQueue.catch(() => {}).then(callback);
+  veyraQueue = task.catch(() => {});
+  return task;
+}
+async function storeVeyra(next) {
+  veyraSecrets.add(next.accessToken);
+  await veyraVault.write(next);
+  veyraSession = next;
+}
+// Вход забывается только на этом компьютере: токен на сервере отзывает veyraLogout.
+async function dropVeyra() {
+  veyraRevision++;
+  await veyraVault.clear();
+  veyraSession = null;
+  if (settings.accountMode === 'veyra') { settings.accountMode = 'local'; await persist(); }
+  emitState();
+}
+// Устаревший токен обменивается на новый; если сервер не принял и его, нужен новый вход.
+async function renewVeyra(session, signal) {
+  let renewed;
+  try { renewed = await veyra.refresh(session.accessToken, session.clientToken, signal); }
+  catch (error) {
+    if (error.code === 'expired' && veyraSession === session) { await dropVeyra(); status('Вход в аккаунт Veyra устарел — войдите заново', 'error'); }
+    throw error;
+  }
+  veyraSecrets.add(renewed.accessToken);
+  if (veyraSession !== session) throw new Error('Аккаунт Veyra изменился. Повторите действие');
+  const next = { ...session, accessToken: renewed.accessToken, clientToken: renewed.clientToken, profile: renewed.profile };
+  await storeVeyra(next);
+  emitState();
+  return next;
+}
+// Запрос с токеном: при ответе 401 токен один раз обновляется и запрос повторяется.
+async function withVeyra(callback, signal) {
+  const session = veyraSession;
+  if (!session) throw new Error('Сначала войдите в аккаунт Veyra');
+  try { return await callback(session.accessToken); }
+  catch (error) {
+    if (error.code !== 'unauthorized') throw error;
+    return callback((await renewVeyra(session, signal)).accessToken);
+  }
+}
+// Скин хранится рядом с данными лаунчера и отдаётся окну по veyra://skin/<sha256>.
+// Недостающий файл скачивается только для скина текущего аккаунта (или по прямой просьбе download).
+async function cachedSkin(hash, download = false) {
+  const file = path.join(veyraSkinDir(), hash + '.png');
+  const bytes = await fs.readFile(file).catch(() => null);
+  if (bytes && sha256(bytes) === hash) return bytes;
+  if (!download && veyraSession?.skin?.hash !== hash) return null;
+  const fresh = await veyra.texture(hash);
+  await fs.mkdir(veyraSkinDir(), { recursive: true });
+  const temporary = file + '.tmp-' + randomUUID();
+  try { await fs.writeFile(temporary, fresh); await fs.rename(temporary, file); }
+  finally { await fs.rm(temporary, { force: true }).catch(() => {}); }
+  // Прежние скины больше не нужны.
+  for (const name of await fs.readdir(veyraSkinDir()).catch(() => [])) if (/^[0-9a-f]{64}\.png$/.test(name) && name !== hash + '.png') await fs.rm(path.join(veyraSkinDir(), name), { force: true }).catch(() => {});
+  return fresh;
+}
+async function setVeyraSkin(skin) {
+  if (skin) await cachedSkin(skin.hash, true).catch(error => log('Аккаунт Veyra: скин не скачан: ' + errorMessage(error)));
+  if (!veyraSession) throw new Error('Сначала войдите в аккаунт Veyra');
+  await storeVeyra({ ...veyraSession, skin });
+  emitState();
+  return publicState().account.veyra.skin;
+}
+// Описание сервера для authlib-injector запоминается: без сети игра запускается с последним полученным.
+async function veyraMetadata(signal) {
+  try {
+    const text = await veyra.metadata(signal);
+    veyraMetadataText = text;
+    await atomicJson(veyraMetadataFile(), { api: veyra.root, text }).catch(error => log('Описание сервера Veyra не сохранено: ' + errorMessage(error)));
+    return text;
+  } catch (error) {
+    if (error.code === 'cancelled') throw error;
+    const saved = veyraMetadataText || await readJson(veyraMetadataFile(), null).then(value => value?.api === veyra.root && typeof value.text === 'string' ? value.text : '');
+    if (!saved) throw error;
+    log('Аккаунт Veyra: описание сервера взято из сохранённого (' + errorMessage(error) + ')');
+    return saved;
+  }
+}
+// Java-агент входа через Veyra для клиента и локального сервера.
+async function veyraAgent(signal) {
+  progress({ phase: 'Аккаунт Veyra', completed: 0, total: 0, message: 'Готовим вход через Veyra' }, true);
+  const [jar, metadata] = await Promise.all([ensureAuthlib(dataDir(), { signal, version: app.getVersion(), log }), veyraMetadata(signal)]);
+  return ['-javaagent:' + jar + '=' + veyra.root, '-Dauthlibinjector.yggdrasil.prefetched=' + Buffer.from(metadata, 'utf8').toString('base64'), '-Dauthlibinjector.noShowServerName'];
+}
+// Агент и описание заранее, чтобы первый запуск не ждал загрузки и работал без сети.
+function prepareVeyraAgent() {
+  Promise.all([ensureAuthlib(dataDir(), { version: app.getVersion(), log }), veyraMetadata()]).catch(error => log('Аккаунт Veyra: подготовка к запуску: ' + errorMessage(error)));
+}
+
+async function veyraSignIn(kind, username, password) {
+  if (typeof username !== 'string' || typeof password !== 'string') throw new Error('Введите ник и пароль');
+  if (activeOperation?.type === 'launch') throw new Error('Дождитесь запуска игры');
+  const waitKey = kind === 'register' ? 'register' : 'login:' + username.trim().toLowerCase();
+  const left = Math.ceil(((veyraWaits.get(waitKey) || 0) - Date.now()) / 1000);
+  if (left > 0) throw new Error('Слишком много попыток. Подождите ' + waitText(left) + '.');
+  veyraWaits.delete(waitKey);
+  const revision = ++veyraRevision, clientToken = randomUUID().replace(/-/g, '');
+  let session;
+  try { session = kind === 'register' ? await veyra.register(username.trim(), password, clientToken) : await veyra.authenticate(username.trim(), password, clientToken); }
+  catch (error) {
+    if (error.retryAfter) { veyraWaits.set(waitKey, Date.now() + error.retryAfter * 1000); emitState(); }
+    throw error;
+  }
+  veyraSecrets.add(session.accessToken);
+  const me = await veyra.me(session.accessToken).catch(error => { log('Аккаунт Veyra: профиль не прочитан: ' + errorMessage(error)); return null; });
+  if (revision !== veyraRevision) {
+    veyra.invalidate(session.accessToken, session.clientToken).catch(() => {});
+    throw new Error('Вход отменён');
+  }
+  const previous = veyraSession;
+  await storeVeyra({ api: veyra.root, clientToken: session.clientToken, accessToken: session.accessToken, profile: session.profile, skin: me?.skin || null });
+  settings.accountMode = 'veyra';
+  await persist();
+  if (previous && previous.accessToken !== session.accessToken) retireVeyra(previous).catch(error => log('Аккаунт Veyra: ' + errorMessage(error)));
+  if (veyraSession.skin) await cachedSkin(veyraSession.skin.hash).catch(error => log('Аккаунт Veyra: скин не скачан: ' + errorMessage(error)));
+  emitState();
+  status((kind === 'register' ? 'Аккаунт Veyra создан: ' : 'Вход в аккаунт Veyra: ') + session.profile.name, 'success');
+  prepareVeyraAgent();
+  return true;
+}
+// Один профиль — один клиент: по UUID, как его видит сервер (у локального ника с тем же именем UUID тот же).
+const playingAs = id => [...games.values()].some(run => run.profileId === id);
+// Токен входа держит только клиент, запущенный с этим токеном, — не локальный ник с тем же UUID.
+const playingWith = token => Boolean(token) && [...games.values()].some(run => run.veyraToken === sha256(token));
+// Сервер ответил и токена больше не знает (4xx, кроме 429) — отзывать нечего.
+const revokeSettled = error => error instanceof VeyraError && error.status >= 400 && error.status < 500 && error.status !== 429;
+function saveRevokes() {
+  const tokens = veyraRevokes.slice();
+  return (tokens.length ? revokeVault.write({ tokens }) : revokeVault.clear()).catch(error => log('Аккаунт Veyra: список отложенных выходов не сохранён: ' + errorMessage(error)));
+}
+function revokeLater(session) {
+  veyraRevokes = [...veyraRevokes.filter(item => item.accessToken !== session.accessToken), { api: session.api, accessToken: session.accessToken, clientToken: session.clientToken, at: Date.now() }].slice(-20);
+  return saveRevokes();
+}
+// Токен прежнего входа отзывается на сервере. Пока им играет клиент, отзыв ждёт его закрытия:
+// игра продолжает входить на серверы. Без ответа сервера отзыв повторится при следующем запуске лаунчера.
+async function retireVeyra(session) {
+  if (playingWith(session.accessToken)) return revokeLater(session);
+  try { await veyra.invalidate(session.accessToken, session.clientToken); }
+  catch (error) {
+    if (revokeSettled(error)) return;
+    log('Аккаунт Veyra: выход на сервере не подтверждён, повторим позже: ' + errorMessage(error));
+    await revokeLater(session);
+  }
+}
+// Отложенные токены отзываются, когда ими больше не играет ни один клиент. Токены старше срока жизни сервер уже забыл.
+function revokePending() {
+  revokeQueue = revokeQueue.catch(() => {}).then(async () => {
+    let changed = false;
+    for (const item of veyraRevokes.slice()) {
+      if (playingWith(item.accessToken)) continue;
+      let done = Date.now() - item.at > 31 * 24 * 3600 * 1000 || item.accessToken === veyraSession?.accessToken;
+      if (!done) {
+        const client = item.api === veyra.root ? veyra : new VeyraAccount({ root: apiRoot(item.api), version: app.getVersion() });
+        try { await client.invalidate(item.accessToken, item.clientToken); done = true; }
+        catch (error) { done = revokeSettled(error); if (!done) log('Аккаунт Veyra: отложенный выход не подтверждён, повторим при следующем запуске: ' + errorMessage(error)); }
+      }
+      if (done) { veyraRevokes = veyraRevokes.filter(other => other !== item); changed = true; }
+    }
+    if (changed) await saveRevokes();
+  });
+  return revokeQueue;
+}
+async function veyraLogout() {
+  if (activeOperation?.type === 'launch') throw new Error('Дождитесь запуска игры');
+  const session = veyraSession;
+  await dropVeyra();
+  if (session) await retireVeyra(session);
+  if (session) status('Вы вышли из аккаунта Veyra ' + session.profile.name);
+  return true;
+}
+// Профиль и скин перечитываются с сайта: скин могли сменить в личном кабинете.
+async function refreshVeyra() {
+  const me = await withVeyra(token => veyra.me(token));
+  if (!veyraSession || me.id !== veyraSession.profile.id) return publicState().account.veyra;
+  // Скин не менялся — файл сессии не переписывается, только проверяется копия скина.
+  if (JSON.stringify(me.skin) === JSON.stringify(veyraSession.skin)) { if (me.skin) await cachedSkin(me.skin.hash).catch(error => log('Аккаунт Veyra: скин не скачан: ' + errorMessage(error))); }
+  else await setVeyraSkin(me.skin);
+  return publicState().account.veyra;
+}
+async function uploadVeyraSkin() {
+  if (!veyraSession) throw new Error('Сначала войдите в аккаунт Veyra');
+  const selection = await dialog.showOpenDialog(window, { title: 'Выберите скин Minecraft (PNG 64×64)', properties: ['openFile'], filters: [{ name: 'Скин Minecraft', extensions: ['png'] }] });
+  if (selection.canceled || !selection.filePaths[0]) return null;
+  const stat = await fs.stat(selection.filePaths[0]);
+  if (!stat.isFile()) throw new Error('Выберите файл PNG');
+  if (stat.size > 64 * 1024) throw new Error('Скин больше 64 КБ — выберите PNG 64×64 или 64×32');
+  const bytes = await fs.readFile(selection.filePaths[0]);
+  checkSkinFile(bytes);
+  // Модель берётся из самой картинки; если по ней не понять — остаётся прежняя.
+  const detected = skinModel(bytes);
+  return veyraTask(async () => {
+    const skin = await withVeyra(token => veyra.uploadSkin(token, bytes, detected ?? veyraSession?.skin?.slim === true));
+    const result = await setVeyraSkin(skin);
+    status('Скин загружен — если игра уже открыта, он появится после её перезапуска', 'success');
+    return result;
+  });
+}
+async function setVeyraSkinModel(slim) {
+  if (typeof slim !== 'boolean') throw new Error('Модель скина: классическая или тонкая');
+  return setVeyraSkin(await withVeyra(token => veyra.setSkinModel(token, slim)));
+}
+async function removeVeyraSkin() {
+  await withVeyra(token => veyra.removeSkin(token));
+  await setVeyraSkin(null);
+  status('Скин удалён — в игре снова скин Veyra по умолчанию', 'success');
+  return null;
+}
+// Сервер аккаунтов недоступен или не в порядке (нет сети, 5xx и 429 хостинга, ответ не по формату), но токен он не отверг.
+const veyraUnreachable = error => error instanceof VeyraError && !['cancelled', 'expired'].includes(error.code) && error.status !== 401 && error.status !== 403;
+// Перед запуском токен проверяется и при отказе (401/403) обновляется; если сервер аккаунтов недоступен,
+// игра запускается с сохранённым входом — одиночной игре он не нужен.
+async function veyraIdentity(signal) {
+  let session = veyraSession;
+  if (!session) throw new Error('Войдите в аккаунт Veyra в профиле или выберите локальный ник');
+  try {
+    if (!await veyra.validate(session.accessToken, session.clientToken, signal)) session = await renewVeyra(session, signal);
+  } catch (error) {
+    if (!veyraUnreachable(error)) throw error;
+    log('Аккаунт Veyra: сервер аккаунтов недоступен, запускаем с сохранённым входом (' + errorMessage(error) + ')');
+    session = veyraSession || session;
+  }
+  return { gameProfile: { ...session.profile }, accessToken: session.accessToken, userType: 'mojang' };
 }
 
 function emitState() {
@@ -1039,7 +1298,11 @@ async function launchInstance(id, connect = false) {
   const operation = beginOperation('launch', id);
   try {
     if (connect && (!server.run || server.state.status !== 'ready' || server.state.instanceId !== id)) throw new Error('Сначала запустите сервер этой сборки и дождитесь готовности');
+    const mode = settings.accountMode;
+    if (connect && server.state.config?.veyraLogin && mode !== 'veyra') throw new Error('Сервер запущен со входом через Veyra: на него пускают только игроков с аккаунтом Veyra. Войдите в аккаунт в профиле и нажмите «Играть с этим аккаунтом»');
     await clientsReady;
+    // Аккаунт Veyra играет только в одном клиенте: отказ сразу, а не после подготовки файлов и Java.
+    if (mode === 'veyra' && veyraSession && playingAs(veyraSession.profile.id)) throw new Error('Аккаунт Veyra «' + veyraSession.profile.name + '» уже играет в другом клиенте. Для второго клиента выберите в профиле локальный ник');
     const memoryGb = instance.memoryGb || settings.memoryGb;
     ensureMemory(memoryGb);
     await content.recover(instance);
@@ -1051,16 +1314,22 @@ async function launchInstance(id, connect = false) {
       progress,
       operation.signal
     );
-    const identity = settings.accountMode === 'microsoft'
-      ? await microsoftIdentity(operation.signal)
+    const identity = mode === 'microsoft' ? await microsoftIdentity(operation.signal)
+      : mode === 'veyra' ? await veyraIdentity(operation.signal)
       : (() => { const name = clientName(settings.playerName, [...games.values()].map(run => run.name), settings.allowAnySymbols); return { gameProfile: { name, id: offlineUuid(name) }, accessToken: '0', userType: 'legacy' }; })();
-    if (identity.accessToken !== '0' && [...games.values()].some(run => run.profileId === identity.gameProfile.id)) throw new Error('Этот Microsoft-профиль уже используется клиентом. Для второго нужен другой профиль');
+    // Один профиль — один клиент: сервер не пустит второй вход с тем же UUID.
+    if (identity.accessToken !== '0' && playingAs(identity.gameProfile.id)) {
+      throw new Error(mode === 'veyra' ? 'Аккаунт Veyra «' + identity.gameProfile.name + '» уже играет в другом клиенте. Для второго клиента выберите в профиле локальный ник' : 'Этот Microsoft-профиль уже используется клиентом. Для второго нужен другой профиль');
+    }
+    const agent = mode === 'veyra' ? await veyraAgent(operation.signal) : [];
+    // Отпечаток токена Veyra: выход из аккаунта не отзывает токен, пока этот клиент работает.
+    const veyraToken = mode === 'veyra' ? sha256(identity.accessToken) : '';
     const runId = randomUUID(), startedAt = Date.now();
     const directory = await clientFolder(instance, [...games.values()].some(run => run.directory === instance.directory));
     const extraJVMArgs = javaArguments([clientMarker({
       data: dataTag(), run: runId, instance: id, folder: directory === instance.directory ? '' : path.basename(directory),
-      name: identity.gameProfile.name, profile: identity.gameProfile.id, memory: memoryGb, started: startedAt,
-    })]);
+      name: identity.gameProfile.name, profile: identity.gameProfile.id, memory: memoryGb, started: startedAt, veyra: veyraToken,
+    }), ...agent]);
     if (instance.loader === 'neoforge' && instance.loaderVersion === '26.3.0.56-beta') {
       const source = path.join(__dirname, '..', 'assets', 'compat', 'neoforge-version-guard.jar');
       const agent = path.join(dataDir(), 'compat', 'neoforge-version-guard.jar');
@@ -1090,7 +1359,7 @@ async function launchInstance(id, connect = false) {
       launcherName: 'Veyra Launcher',
       extraExecOption: { windowsHide: true },
     });
-    const run = { id: runId, child, pid: child.pid, instanceId: id, directory, memoryGb, name: identity.gameProfile.name, profileId: identity.gameProfile.id, stopping: false, stoppedByUser: false, startedAt, accountedAt: Date.now(), settled: false };
+    const run = { id: runId, child, pid: child.pid, instanceId: id, directory, memoryGb, name: identity.gameProfile.name, profileId: identity.gameProfile.id, veyraToken, stopping: false, stoppedByUser: false, startedAt, accountedAt: Date.now(), settled: false };
     trackRun(run);
     lastCrash = null;
     let recentOutput = '';
@@ -1145,6 +1414,8 @@ function finishRun(run) {
   games.delete(run.id); gameProcess = [...games.values()].at(-1) || null;
   saveClients();
   emitState();
+  // Клиент закрылся — токен, который ждал его закрытия после выхода из аккаунта, отзывается.
+  if (run.veyraToken && veyraRevokes.length) revokePending();
   return true;
 }
 
@@ -1176,9 +1447,10 @@ function reportCrash(run, message, file) {
 
 // Клиенты, запущенные лаунчером до перезапуска, находятся по метке Veyra в командной строке Java.
 // Метка должна принадлежать сборке этого лаунчера: чужие клиенты Minecraft и игры других папок данных не учитываются.
+// true — поиск прошёл: лаунчер знает все свои работающие клиенты.
 async function discoverClients() {
   let found;
-  try { found = await findClients(); } catch (error) { log('Поиск запущенных клиентов: ' + errorMessage(error)); return; }
+  try { found = await findClients(); } catch (error) { log('Поиск запущенных клиентов: ' + errorMessage(error)); return false; }
   const clock = await fs.readFile(clientsFile(), 'utf8').then(JSON.parse).catch(() => ({}));
   const adopted = [], tag = dataTag();
   for (const { pid, createdAt, info } of found) {
@@ -1189,7 +1461,7 @@ async function discoverClients() {
     const run = {
       id: info.run, child: null, pid, adopted: true, instanceId: instance.id,
       directory: info.folder ? path.join(instance.directory, '.veyra-clients', info.folder) : instance.directory,
-      memoryGb: info.memory, name: info.name, profileId: info.profile, stopping: false, stoppedByUser: false,
+      memoryGb: info.memory, name: info.name, profileId: info.profile, veyraToken: info.veyra || '', stopping: false, stoppedByUser: false,
       startedAt: Math.min(info.started, now), accountedAt: saved >= createdAt - 60000 && saved <= now ? saved : now, settled: false,
     };
     trackRun(run);
@@ -1197,10 +1469,11 @@ async function discoverClients() {
     log('Найден запущенный клиент: ' + instance.name + ' · ' + run.name + ' (PID ' + pid + ')');
   }
   saveClients();
-  if (!adopted.length) return;
+  if (!adopted.length) return true;
   emitState();
   status(adopted.length > 1 ? 'Minecraft уже запущен: клиентов — ' + adopted.length : 'Minecraft уже запущен: ' + settings.instances.find(item => item.id === adopted[0].instanceId).name, 'success');
   watchClients();
+  return true;
 }
 
 // Найденные клиенты не связаны с лаунчером каналом вывода: их завершение замечается по процессу.
@@ -1306,8 +1579,10 @@ async function startServer(id, acceptEula) {
     await content.recover(instance);
     const requirements = await fetchRequirements(metadata, operation.signal);
     const java = await resolveJava({ javaVersion: { majorVersion: requirements.major, component: requirements.component } }, instance.javaPath || settings.javaPath, dataDir(), progress, operation.signal);
+    // Вход через Veyra: сервер проверяет игроков через тот же агент, что и клиент.
+    const agent = config.veyraLogin ? await veyraAgent(operation.signal) : [];
     progress({ phase: 'Сервер', message: 'Готовим локальный сервер на ' + config.port, completed: 0, total: 0 }, true);
-    return await server.start(instance, metadata, java.path, memoryGb, acceptEula === true, operation.signal, config);
+    return await server.start(instance, metadata, java.path, memoryGb, acceptEula === true, operation.signal, config, agent);
   } catch (error) { if (operation.signal.aborted) { status('Подготовка сервера отменена'); return server.state; } reportError('Сервер', error); throw error; }
   finally { endOperation(operation); }
 }
@@ -1402,6 +1677,21 @@ function registerIpc() {
     return true;
   });
   ipcMain.handle('launcher:copy-login-code', () => { if (authState.userCode) clipboard.writeText(authState.userCode); return true; });
+  ipcMain.handle('launcher:veyra-login', (_event, username, password) => veyraTask(() => veyraSignIn('login', username, password)));
+  ipcMain.handle('launcher:veyra-register', (_event, username, password) => veyraTask(() => veyraSignIn('register', username, password)));
+  ipcMain.handle('launcher:veyra-logout', () => veyraTask(veyraLogout));
+  ipcMain.handle('launcher:veyra-refresh', () => veyraTask(refreshVeyra));
+  ipcMain.handle('launcher:veyra-upload-skin', () => uploadVeyraSkin());
+  ipcMain.handle('launcher:veyra-set-skin-model', (_event, slim) => veyraTask(() => setVeyraSkinModel(slim)));
+  ipcMain.handle('launcher:veyra-remove-skin', () => veyraTask(removeVeyraSkin));
+  ipcMain.handle('launcher:open-cabinet', async () => { await shell.openExternal(accountConfig.cabinet); return true; });
+  // Только две ссылки сообщества из account-config.json.
+  ipcMain.handle('launcher:open-community', async (_event, kind) => {
+    const links = { telegram: accountConfig.telegram, discord: accountConfig.discord };
+    if (typeof kind !== 'string' || !Object.hasOwn(links, kind)) throw new Error('Неизвестная ссылка сообщества');
+    await shell.openExternal(links[kind]);
+    return true;
+  });
   ipcMain.handle('launcher:open-crash-report', async () => {
     const instance = requireInstance(lastCrash?.instanceId);
     const target = lastCrash.file || path.join(instance.directory, 'logs');
@@ -1616,6 +1906,12 @@ if (primaryLauncher) app.whenReady().then(async () => {
   protocol.handle('veyra', async (request) => {
     try {
       const url = new URL(request.url);
+      // Скин аккаунта Veyra: с разрешением CORS, чтобы трёхмерный просмотр мог читать его пиксели.
+      if (url.hostname === 'skin') {
+        const hash = url.pathname.slice(1), headers = { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' };
+        const bytes = /^[0-9a-f]{64}$/.test(hash) ? await cachedSkin(hash).catch(() => null) : null;
+        return bytes ? new Response(bytes, { headers: { ...headers, 'Content-Type': 'image/png' } }) : new Response('', { status: 404, headers });
+      }
       if (url.hostname === 'shot' && url.pathname.split('/').length === 3) {
         const [id, name] = url.pathname.slice(1).split('/').map(decodeURIComponent);
         const shot = await screenshotFile(id, name);
@@ -1643,11 +1939,21 @@ if (primaryLauncher) app.whenReady().then(async () => {
   accountVault = new AccountVault(path.join(dataDir(), 'microsoft-session.bin'), safeStorage);
   accountSession = await accountVault.read();
   if (accountSession?.clientId !== microsoftClientId()) accountSession = null;
-  if (!accountSession) settings.accountMode = 'local';
+  veyraVault = new AccountVault(path.join(dataDir(), 'veyra-session.bin'), safeStorage, validVeyraSession);
+  veyraSession = await veyraVault.read();
+  // Вход на другой сервер аккаунтов (адрес из VEYRA_ACCOUNT_API) здесь не действует.
+  if (veyraSession && veyraSession.api !== veyra.root) veyraSession = null;
+  if (veyraSession) veyraSecrets.add(veyraSession.accessToken);
+  revokeVault = new AccountVault(path.join(dataDir(), 'veyra-revoke.bin'), safeStorage, validVeyraRevokes);
+  veyraRevokes = (await revokeVault.read())?.tokens || [];
+  if (settings.accountMode === 'microsoft' && !accountSession || settings.accountMode === 'veyra' && !veyraSession) settings.accountMode = 'local';
   updateDiscord();
   registerIpc();
   createWindow();
-  clientsReady = discoverClients().catch((error) => log('Поиск запущенных клиентов: ' + errorMessage(error)));
+  clientsReady = discoverClients().catch((error) => { log('Поиск запущенных клиентов: ' + errorMessage(error)); return false; });
+  // Отложенные выходы из аккаунта Veyra: токены, которыми не играет ни один найденный клиент, отзываются.
+  // Если клиентов найти не удалось, токены не трогаются — ими может играть клиент, о котором лаунчер не знает.
+  clientsReady.then(known => { if (known && veyraRevokes.length) revokePending(); });
   scheduleUpdates();
   // Список версий и поиск Java начинаются, когда окно уже на экране, и не отнимают время у первой отрисовки.
   let background = false;
@@ -1655,6 +1961,8 @@ if (primaryLauncher) app.whenReady().then(async () => {
     if (background) return;
     background = true;
     refreshVersions().catch(() => {});
+    // Скин и вход аккаунта Veyra сверяются с сайтом: скин могли сменить в личном кабинете.
+    if (veyraSession) veyraTask(refreshVeyra).then(prepareVeyraAgent, error => log('Аккаунт Veyra: ' + errorMessage(error)));
     scanJava(dataDir(), [settings.javaPath, ...settings.instances.map((item) => item.javaPath)])
       .then((found) => { javaCandidates = found; emitState(); })
       .catch((error) => log('Поиск Java: ' + errorMessage(error)));
@@ -1691,7 +1999,7 @@ app.on('before-quit', (event) => {
   // Клиенты продолжают работать после выхода: время до этой минуты записано, следующий запуск лаунчера найдёт их и продолжит учёт.
   clearInterval(clientsWatch);
   for (const run of games.values()) settlePlaytime(run);
-  Promise.allSettled([saveWindowState(), settings ? persist() : Promise.resolve(), settings ? saveClients() : Promise.resolve(), carts.queue, server.stop()]).finally(() => {
+  Promise.allSettled([saveWindowState(), settings ? persist() : Promise.resolve(), settings ? saveClients() : Promise.resolve(), carts.queue, server.stop(), revokeVault?.queue]).finally(() => {
     // Новая версия стартует после сохранения настроек старой.
     if (!handoffFile) return app.quit();
     app.releaseSingleInstanceLock();

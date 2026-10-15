@@ -3,7 +3,7 @@
 
   const api = window.launcher;
   const el = (id) => document.getElementById(id);
-  const state = { data: null, view: 'home', loader: 'vanilla', loaderRequest: 0, editingId: '', editAccent: 'violet', removingId: '', toastTimer: null, busy: false, javaMode: 'auto', profileTab: 'local' };
+  const state = { data: null, view: 'home', loader: 'vanilla', loaderRequest: 0, editingId: '', editAccent: 'violet', removingId: '', toastTimer: null, busy: false, javaMode: 'auto', profileTab: 'local', veyraForm: 'login', veyraBusy: false, skinView: null, skinKey: '', veyraSyncedAt: 0 };
   // Microsoft integration is retained while its public interface is paused.
   const MICROSOFT_UI_ENABLED = false;
   const loaderNames = { vanilla: 'Vanilla', fabric: 'Fabric', neoforge: 'NeoForge', forge: 'Forge' };
@@ -17,7 +17,7 @@
     svg.append(use);
     return svg;
   };
-  const friendlyError = (error) => String(error && error.message ? error.message : error || 'Неизвестная ошибка').replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
+  const friendlyError = (error) => String(error && error.message ? error.message : error || 'Неизвестная ошибка').replace(/^Error invoking remote method '[^']+': (?:\w*Error: )?/, '');
   const instances = () => state.data?.instances || [];
   const selected = () => instances().find((item) => item.id === state.data?.settings.selectedInstanceId) || instances()[0] || null;
   const setText = (id, value) => { if (el(id).textContent !== String(value)) el(id).textContent = String(value); };
@@ -262,7 +262,10 @@
     el('main-action').classList.toggle('button-danger', running);
     el('main-action').classList.toggle('button-primary', !running);
     el('main-action').disabled = Boolean(operation || stopping || (!item.installed && (state.data.runningInstanceId || state.data.server?.pid && !['stopped','error'].includes(state.data.server.status))));
-    el('hero-multi').disabled = Boolean(operation || !item.installed);
+    // Аккаунт Veyra играет только в одном клиенте: пока он в игре, второй клиент — только с локальным ником.
+    const account = state.data.account, veyraBusy = account.mode === 'veyra' && account.veyraPlaying;
+    el('hero-multi').disabled = Boolean(operation || !item.installed || veyraBusy);
+    el('hero-multi').dataset.tipLore = account.mode !== 'veyra' ? 'Отдельная папка и свой ник' : veyraBusy ? 'Аккаунт Veyra уже в игре. Для второго клиента выберите в профиле локальный ник' : 'Отдельная папка, вход аккаунтом Veyra';
     el('hero-edit').disabled = working;
     el('hero-console').hidden = state.data.installConsole?.instanceId !== item.id;
     const box = el('progress-box');
@@ -293,7 +296,7 @@
     el('player-name').value = settings.playerName;
     state.nicknameAny = settings.allowAnySymbols;
     renderNicknameRules();
-    setText('settings-account-status', (MICROSOFT_UI_ENABLED && state.data.account.mode === 'microsoft' ? 'Microsoft · ' : '') + state.data.account.name);
+    setText('settings-account-status', (state.data.account.mode === 'veyra' ? 'Аккаунт Veyra · ' : MICROSOFT_UI_ENABLED && state.data.account.mode === 'microsoft' ? 'Microsoft · ' : '') + state.data.account.name);
     const maximum = memoryMaximum();
     el('memory-gb').max = String(maximum);
     el('memory-range').max = String(maximum);
@@ -384,21 +387,34 @@
       refreshLoaderOptions();
     }
   }
+  const modeLabels = { local: 'Локальный профиль', veyra: 'Аккаунт Veyra', microsoft: MICROSOFT_UI_ENABLED ? 'Microsoft' : 'Игровой профиль' };
   function renderProfile() {
     const account = state.data.account;
     const auth = account.auth;
     setText('profile-chip-name', account.name);
-    setText('profile-chip-mode', account.mode === 'microsoft' ? (MICROSOFT_UI_ENABLED ? 'Microsoft' : 'Игровой профиль') : 'Локальный профиль');
+    setText('profile-chip-mode', modeLabels[account.mode] || modeLabels.local);
     setText('rail-profile-initial', Array.from(account.name)[0]?.toUpperCase() || 'P');
     setText('profile-avatar', Array.from(account.name)[0]?.toUpperCase() || 'P');
     setText('profile-active-name', account.name);
-    setText('profile-active-mode', account.mode === 'microsoft' ? (MICROSOFT_UI_ENABLED ? 'Microsoft · Minecraft Java' : 'Игровой профиль') : 'Локальный профиль');
-    el('profile-rail').dataset.tipLore = account.name;
+    setText('profile-active-mode', account.mode === 'microsoft' ? (MICROSOFT_UI_ENABLED ? 'Microsoft · Minecraft Java' : 'Игровой профиль') : account.mode === 'veyra' ? (account.veyra?.skin ? 'Аккаунт Veyra · скин виден в игре' : 'Аккаунт Veyra · в игре скин Veyra по умолчанию') : 'Локальный профиль');
+    el('profile-rail').dataset.tipLore = account.name + ' · ' + (modeLabels[account.mode] || modeLabels.local);
+    // Вкладка — что показано; метка на вкладке — с чем сейчас запускается игра.
     for (const button of document.querySelectorAll('[data-account-mode]')) {
-      button.classList.toggle('is-selected', button.dataset.accountMode === state.profileTab);
+      const selected = button.dataset.accountMode === state.profileTab;
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-selected', String(selected));
+      // Кочующий tabindex: Tab попадает только на выбранную вкладку, между вкладками — стрелки.
+      button.tabIndex = selected ? 0 : -1;
+      const current = button.dataset.accountMode === account.mode;
+      button.classList.toggle('is-current', current);
+      if (current) { button.dataset.tip = 'Сейчас в игре'; button.dataset.tipLore = 'Игра запускается с этим профилем'; } else { delete button.dataset.tip; delete button.dataset.tipLore; }
     }
-    el('account-tabs').hidden = !MICROSOFT_UI_ENABLED;
-    el('profile-local-panel').hidden = MICROSOFT_UI_ENABLED && state.profileTab !== 'local';
+    el('account-tabs').querySelector('[data-account-mode="microsoft"]').hidden = !MICROSOFT_UI_ENABLED;
+    el('profile-local-panel').hidden = state.profileTab !== 'local';
+    el('profile-veyra-panel').hidden = state.profileTab !== 'veyra';
+    el('profile-local-note').hidden = account.mode === 'local';
+    setText('profile-local-note-text', 'Сейчас в игре — ' + (account.mode === 'veyra' ? 'аккаунт Veyra «' + account.name + '»' : 'профиль Microsoft') + '. «Сохранить» вернёт игру на локальный ник.');
+    renderVeyra();
     el('profile-microsoft-panel').hidden = !MICROSOFT_UI_ENABLED || state.profileTab !== 'microsoft';
     el('microsoft-signed').hidden = !account.microsoft;
     el('microsoft-intro').hidden = Boolean(account.microsoft);
@@ -419,17 +435,164 @@
     if (document.activeElement !== el('microsoft-client-id')) el('microsoft-client-id').value = account.clientId;
   }
   function openProfile() {
-    state.profileTab = MICROSOFT_UI_ENABLED ? state.data.account.mode : 'local';
+    const mode = state.data.account.mode;
+    state.profileTab = mode === 'veyra' ? 'veyra' : MICROSOFT_UI_ENABLED && mode === 'microsoft' ? 'microsoft' : 'local';
     el('profile-name-input').value = state.data.settings.playerName;
     state.nicknameAny = state.data.settings.allowAnySymbols;
     renderNicknameRules();
     el('profile-feedback').hidden = true;
-    renderProfile();
+    veyraError('');
     showDialog(el('profile-dialog'));
+    renderProfile();
+    focusProfileTab();
+  }
+  // focus = false — при переходе стрелками фокус остаётся на вкладке.
+  function focusProfileTab(focus = true) {
     if (state.profileTab === 'local') {
+      if (!focus) return;
       el('profile-name-input').focus();
       el('profile-name-input').select();
+    } else if (state.profileTab === 'veyra') {
+      if (state.data.account.veyra) syncVeyra();
+      else if (focus) el(state.veyraForm === 'register' ? 'veyra-register-name' : 'veyra-login-name').focus();
     }
+  }
+
+  // ── Аккаунт Veyra: вход, регистрация, скин и выбор для игры ──
+  const VEYRA_NAME = /^[A-Za-z0-9_]{3,16}$/;
+  const dashed = id => id.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
+  function renderVeyra() {
+    const account = state.data.account, veyra = account.veyra;
+    el('veyra-guest').hidden = Boolean(veyra);
+    el('veyra-signed').hidden = !veyra;
+    for (const button of document.querySelectorAll('.veyra-forms [data-veyra-form]')) {
+      button.classList.toggle('is-active', button.dataset.veyraForm === state.veyraForm);
+      button.setAttribute('aria-pressed', String(button.dataset.veyraForm === state.veyraForm));
+    }
+    el('veyra-login-form').hidden = state.veyraForm !== 'login';
+    el('veyra-register-form').hidden = state.veyraForm !== 'register';
+    renderVeyraWait();
+    if (!veyra) {
+      if (state.skinView) { state.skinView.destroy(); state.skinView = null; state.skinKey = ''; }
+      return;
+    }
+    const skin = veyra.skin, playing = account.mode === 'veyra', busy = state.veyraBusy;
+    setText('veyra-name', veyra.name);
+    setText('veyra-uuid', 'UUID ' + dashed(veyra.id));
+    el('veyra-uuid').title = 'UUID — тот же, что у локального ника ' + veyra.name + ': миры и инвентарь сохраняются';
+    el('veyra-badge').hidden = !playing;
+    el('veyra-play').hidden = playing;
+    el('veyra-play').disabled = busy;
+    el('veyra-upload').disabled = busy;
+    el('veyra-remove').disabled = busy || !skin;
+    el('veyra-logout').disabled = busy;
+    for (const button of document.querySelectorAll('[data-skin-model]')) {
+      const active = (skin?.slim ? 'slim' : 'classic') === button.dataset.skinModel;
+      button.classList.toggle('is-active', Boolean(skin) && active);
+      button.setAttribute('aria-pressed', String(Boolean(skin) && active));
+      button.disabled = busy || !skin;
+    }
+    // Без своего скина модель показывает скин Veyra по умолчанию — его же видят все в игре, и подпись говорит об этом.
+    const label = () => setText('veyra-stage-label', skin && state.skinView?.element.dataset.state === 'fallback' ? 'Скин не загрузился' : skin ? (skin.slim ? 'Тонкая модель' : 'Классическая модель') : 'Скин Veyra — его видят все в игре');
+    // Трёхмерная модель создаётся, когда вкладка видна: до этого ей нечего измерять.
+    if (el('profile-dialog').open && !el('profile-veyra-panel').hidden && window.VeyraSkin) {
+      const key = skin ? skin.url + '|' + skin.slim : 'default';
+      let loading = null;
+      if (!state.skinView) {
+        state.skinView = window.VeyraSkin.view(el('veyra-stage'), { skin: skin?.url || null, slim: Boolean(skin?.slim), animation: 'idle', rotate: true, yaw: -28, pitch: 10 });
+        state.skinKey = key;
+        loading = state.skinView.ready;
+      } else if (state.skinKey !== key) {
+        state.skinKey = key;
+        loading = state.skinView.setSkin(skin?.url || null, Boolean(skin?.slim));
+      }
+      // Свой скин не загрузился — модель показывает скин по умолчанию, и подпись говорит об этом честно.
+      loading?.then(() => { if (state.skinKey === key) label(); });
+    }
+    label();
+  }
+  function veyraError(message) {
+    setText('veyra-error', message || '');
+    el('veyra-error').hidden = !message;
+    if (!message) state.veyraWaitShown = '';
+    // В маленьком окне форма регистрации выше диалога: сообщение прокручивается в видимую часть.
+    else el('veyra-error').scrollIntoView({ block: 'nearest' });
+  }
+  // Ответ 429: ждёт только то, чему отказал сервер, — регистрация или вход под этим ником.
+  // Объяснение сервера один раз появляется в сообщении — без числа секунд, — а оставшееся время тает на кнопке, не в живой области.
+  const veyraWaitKey = form => form === 'register' ? 'register' : 'login:' + el('veyra-login-name').value.trim().toLowerCase();
+  const veyraWaitLeft = key => Math.max(0, Math.ceil(((state.data?.account.veyraWait?.[key] || 0) - Date.now()) / 1000));
+  const clock = seconds => seconds < 60 ? seconds + ' с' : Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+  // Время ожидания из текста сервера убирается: иначе рядом с отсчётом на кнопке стояло бы второе, застывшее число.
+  const withoutWait = text => text.replace(/\s*(?:Подождите|Попробуйте через)\s+\d+\s*(?:с|мин)\.?$/, '');
+  function renderVeyraWait() {
+    for (const form of ['login', 'register']) {
+      const button = el('veyra-' + form + '-submit'), label = button.querySelector('span'), left = veyraWaitLeft(veyraWaitKey(form));
+      label.dataset.text ||= label.textContent;
+      button.disabled = left > 0 || state.veyraBusy;
+      const text = left > 0 ? 'Подождите ' + clock(left) : label.dataset.text;
+      if (label.textContent !== text) label.textContent = text;
+    }
+    // Пауза, о которой говорит сообщение, закончилась — сообщение больше не нужно.
+    if (state.veyraWaitShown && !veyraWaitLeft(state.veyraWaitShown)) veyraError('');
+  }
+  // После отказа запоминается, чью паузу объясняет сообщение.
+  function veyraWaitFailed(form) {
+    const key = veyraWaitKey(form);
+    if (!veyraWaitLeft(key)) return false;
+    state.veyraWaitShown = key;
+    setText('veyra-error', withoutWait(el('veyra-error').textContent) + ' Кнопка оживёт сама, когда закончится отсчёт.');
+    return true;
+  }
+  async function veyraAction(callback) {
+    if (state.veyraBusy) return null;
+    state.veyraBusy = true;
+    veyraError('');
+    el('profile-feedback').hidden = true;
+    renderVeyra();
+    try { return await callback(); }
+    catch (error) { veyraError(friendlyError(error)); return null; }
+    finally { state.veyraBusy = false; if (state.data) renderVeyra(); }
+  }
+  // Скин мог смениться в личном кабинете: при открытии вкладки профиль тихо сверяется с сайтом.
+  function syncVeyra() {
+    if (Date.now() - state.veyraSyncedAt < 30000) return;
+    state.veyraSyncedAt = Date.now();
+    api.veyraRefresh().catch(() => {});
+  }
+  function showVeyraForm(form) {
+    state.veyraForm = form;
+    veyraError('');
+    renderVeyra();
+    el(form === 'register' ? 'veyra-register-name' : 'veyra-login-name').focus();
+  }
+  function checkVeyraName() {
+    const input = el('veyra-register-name'), value = input.value, length = Array.from(value).length, rule = el('veyra-name-rule');
+    setText('veyra-name-count', length + ' / 16');
+    const valid = VEYRA_NAME.test(value);
+    const problem = !value ? '' : /[^A-Za-z0-9_]/.test(value) ? 'Только латинские буквы, цифры и знак _' : length < 3 ? 'Ещё ' + (3 - length) + ' — ник от 3 символов' : '';
+    input.setCustomValidity(value && !valid ? problem || 'Ник — от 3 до 16 символов: латинские буквы, цифры и _' : '');
+    setText('veyra-name-rule', valid ? 'Ник подходит. Сменить его потом нельзя.' : problem || '3–16 символов: латинские буквы, цифры и _. Ник потом не сменить.');
+    rule.classList.toggle('is-valid', valid);
+    rule.classList.toggle('is-invalid', Boolean(problem));
+  }
+  function checkVeyraPassword() {
+    const password = el('veyra-register-password'), confirm = el('veyra-register-confirm'), rule = el('veyra-password-rule'), length = Array.from(password.value).length;
+    const control = /[\x00-\x1f\x7f]/.test(password.value);
+    password.setCustomValidity(password.value && length < 6 ? 'Пароль — не меньше 6 символов' : control ? 'Пароль без переносов строк и табуляции' : '');
+    const mismatch = Boolean(confirm.value) && confirm.value !== password.value;
+    confirm.setCustomValidity(mismatch ? 'Пароли не совпадают' : '');
+    const text = !password.value ? 'Пароль — не меньше 6 символов.' : length < 6 ? 'Ещё ' + (6 - length) + ' — пароль от 6 символов' : control ? 'Без переносов строк и табуляции' : mismatch ? 'Пароли не совпадают' : confirm.value ? 'Пароли совпадают' : 'Пароль подходит — повторите его';
+    setText('veyra-password-rule', text);
+    rule.classList.toggle('is-valid', Boolean(password.value) && length >= 6 && !control && !mismatch && Boolean(confirm.value));
+    rule.classList.toggle('is-invalid', Boolean(password.value) && (length < 6 || control || mismatch));
+  }
+  function checkVeyraLogin() {
+    const input = el('veyra-login-name');
+    input.setCustomValidity(input.value && !VEYRA_NAME.test(input.value.trim()) ? 'Ник аккаунта — 3–16 латинских букв, цифр или _' : '');
+    // Пауза после 429 своя у каждого ника: под другим ником можно входить сразу, и сообщение о паузе уходит.
+    if (state.veyraWaitShown?.startsWith('login:') && state.veyraWaitShown !== veyraWaitKey('login')) veyraError('');
+    renderVeyraWait();
   }
   async function profileAction(callback) {
     el('profile-feedback').hidden = true;
@@ -1218,7 +1381,8 @@
       showView(buttons[(index + (event.deltaY > 0 ? 1 : -1) + buttons.length) % buttons.length].dataset.view);
     }, { passive: true });
     document.addEventListener('keydown', (event) => {
-      const dialog = document.querySelector('dialog[open]:not(.is-closing)');
+      // Escape закрывает верхнее окно: подтверждение поверх профиля закрывается, а профиль остаётся.
+      const dialog = [...document.querySelectorAll('dialog[open]:not(.is-closing)')].at(-1);
       if (event.key === 'Escape' && dialog && !event.defaultPrevented) {
         event.preventDefault();
         closeDialog(dialog);
@@ -1241,20 +1405,86 @@
     el('notice-close').addEventListener('click', () => { el('notice').hidden = true; });
     el('notice-report').addEventListener('click', () => action(() => api.openCrashReport()));
     for (const id of ['profile-rail', 'profile-top', 'settings-profile']) el(id).addEventListener('click', openProfile);
-    for (const button of document.querySelectorAll('[data-account-mode]')) {
-      button.addEventListener('click', async () => {
-        state.profileTab = button.dataset.accountMode;
-        renderProfile();
-        if (state.profileTab === 'local') {
-          await profileAction(() => api.cancelMicrosoftLogin());
-          await profileAction(() => api.selectAccount('local'));
-          el('profile-name-input').value = state.data.settings.playerName;
-          el('profile-name-input').focus();
-          el('profile-name-input').select();
-        } else if (state.data.account.microsoft) await profileAction(() => api.selectAccount('microsoft'));
+    // Вкладки только показывают профиль; играть с ним — «Сохранить» у ника или «Играть с этим аккаунтом» у Veyra.
+    async function chooseProfileTab(button, focus) {
+      state.profileTab = button.dataset.accountMode;
+      el('profile-feedback').hidden = true;
+      renderProfile();
+      if (state.profileTab === 'microsoft') {
+        if (state.data.account.microsoft) await profileAction(() => api.selectAccount('microsoft'));
         else if (!state.data.account.configured) el('microsoft-setup').open = true;
+        return;
+      }
+      if (state.profileTab === 'local' && state.data.account.mode === 'microsoft') {
+        await profileAction(() => api.cancelMicrosoftLogin());
+        await profileAction(() => api.selectAccount('local'));
+      }
+      if (state.profileTab === 'local') el('profile-name-input').value = state.data.settings.playerName;
+      focusProfileTab(focus);
+    }
+    for (const button of document.querySelectorAll('[data-account-mode]')) button.addEventListener('click', () => chooseProfileTab(button, true));
+    // Вкладки по шаблону ARIA: стрелки, Home и End переходят между видимыми вкладками и сразу показывают их.
+    el('account-tabs').addEventListener('keydown', event => {
+      const tabs = [...el('account-tabs').querySelectorAll('[role="tab"]:not([hidden])')], index = tabs.indexOf(document.activeElement);
+      const next = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: tabs.length - 1 }[event.key];
+      if (index < 0 || next === undefined || event.altKey || event.ctrlKey || event.metaKey) return;
+      event.preventDefault();
+      const tab = tabs[(next + tabs.length) % tabs.length];
+      tab.focus();
+      if (tab.dataset.accountMode !== state.profileTab) chooseProfileTab(tab, false);
+    });
+    for (const button of document.querySelectorAll('[data-veyra-form]')) button.addEventListener('click', () => showVeyraForm(button.dataset.veyraForm));
+    el('veyra-login-name').addEventListener('input', checkVeyraLogin);
+    el('veyra-register-name').addEventListener('input', checkVeyraName);
+    for (const id of ['veyra-register-password', 'veyra-register-confirm']) el(id).addEventListener('input', checkVeyraPassword);
+    el('veyra-login-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const name = el('veyra-login-name').value.trim();
+      if (await veyraAction(() => api.veyraLogin(name, el('veyra-login-password').value))) {
+        el('veyra-login-form').reset();
+        state.veyraSyncedAt = Date.now();
+      } else if (el('profile-dialog').open) {
+        // Пауза у этого ника — можно войти под другим; иначе пароль выделяется для повторного ввода.
+        if (veyraWaitFailed('login')) el('veyra-login-name').select();
+        else el('veyra-login-password').select();
+      }
+    });
+    el('veyra-register-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const name = el('veyra-register-name').value.trim();
+      if (await veyraAction(() => api.veyraRegister(name, el('veyra-register-password').value))) {
+        el('veyra-register-form').reset();
+        checkVeyraName(); checkVeyraPassword();
+        state.veyraForm = 'login';
+        state.veyraSyncedAt = Date.now();
+        renderVeyra();
+      } else if (veyraWaitFailed('register') && el('profile-dialog').open) el('veyra-register-form').querySelector('[data-veyra-form="login"]').focus();
+    });
+    el('veyra-play').addEventListener('click', async () => {
+      if (await veyraAction(() => api.selectAccount('veyra'))) toast('Играете с аккаунтом Veyra ' + state.data.account.name);
+    });
+    el('veyra-upload').addEventListener('click', () => veyraAction(() => api.veyraUploadSkin()));
+    for (const button of document.querySelectorAll('[data-skin-model]')) {
+      button.addEventListener('click', async () => {
+        const slim = button.dataset.skinModel === 'slim';
+        if (!state.data.account.veyra?.skin || state.data.account.veyra.skin.slim === slim) return;
+        if (await veyraAction(() => api.veyraSetSkinModel(slim))) toast(slim ? 'Модель скина: тонкие руки' : 'Модель скина: классическая');
       });
     }
+    // Удаление скина необратимо (файл уходит и с сайта), поэтому сначала подтверждение, как в личном кабинете.
+    el('veyra-remove').addEventListener('click', () => { showDialog(el('veyra-remove-dialog')); el('veyra-remove-keep').focus(); });
+    el('confirm-veyra-remove').addEventListener('click', async () => {
+      const dialog = el('veyra-remove-dialog'), closed = new Promise(resolve => dialog.addEventListener('close', resolve, { once: true }));
+      closeDialog(dialog);
+      await Promise.all([veyraAction(() => api.veyraRemoveSkin()), closed]);
+      // Пока подтверждение открыто, профиль под ним недоступен для фокуса. После удаления кнопка корзины выключена — фокус у загрузки скина.
+      el(el('veyra-remove').disabled ? 'veyra-upload' : 'veyra-remove').focus();
+    });
+    el('veyra-cabinet').addEventListener('click', () => veyraAction(() => api.openCabinet()));
+    el('veyra-logout').addEventListener('click', async () => {
+      if (await veyraAction(() => api.veyraLogout())) { state.veyraForm = 'login'; renderVeyra(); }
+    });
+    for (const button of document.querySelectorAll('[data-community]')) button.addEventListener('click', () => action(() => api.openCommunity(button.dataset.community)));
     el('profile-name-form').addEventListener('submit', async (event) => {
       event.preventDefault();
       const saved = await profileAction(() => api.saveSettings({ playerName: el('profile-name-input').value.trim(), allowAnySymbols: el('profile-any-symbols').checked }));
@@ -1507,7 +1737,7 @@
     ready();
     // Java ищет главный процесс сразу после появления окна и присылает результат сам.
     if (!data.versions.length) await action(() => api.refreshVersions());
-    setInterval(() => { renderGreeting(); renderPlaytime(); }, 1000);
+    setInterval(() => { renderGreeting(); renderPlaytime(); if (el('profile-dialog').open) renderVeyraWait(); }, 1000);
   }
   initialize();
 })();

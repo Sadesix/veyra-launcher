@@ -547,6 +547,59 @@ input[type="range"]:disabled { opacity: .35; cursor: not-allowed; }
 .account-tabs button { display: flex; align-items: center; justify-content: center; gap: 9px; height: 39px; border: 0; background: none; color: var(--plum-300); font: 12px/1 var(--mc); }
 .account-tabs button.is-selected { background: var(--peri); color: var(--plum-950); }
 .account-tabs .icon { width: 12px; height: 12px; }
+/* ── Профиль: вкладки, аккаунт Veyra и трёхмерный скин ── */
+.account-tabs { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); margin-bottom: 18px; }
+.account-tabs button { position: relative; padding: 0 9px; white-space: nowrap; transition: color .15s; }
+.account-tabs button:hover:not(.is-selected) { color: var(--cream); }
+.account-tabs button.is-selected { box-shadow: inset 0 3px 0 var(--peri-300), inset 0 -3px 0 var(--peri-600); }
+/* Квадратик на вкладке — с этим профилем сейчас запускается игра. */
+.account-tabs .tab-mark { display: none; width: 6px; height: 6px; flex: none; background: var(--sage); }
+.account-tabs .is-selected .tab-mark { background: var(--sage-700); }
+.account-tabs .is-current .tab-mark { display: block; }
+.profile-switch-note { display: flex; align-items: flex-start; gap: 10px; margin: 6px 0 0; padding: 9px 12px; background: color-mix(in srgb, var(--peri) 11%, transparent); color: var(--peri-300); font-size: 14px; line-height: 1.5; box-shadow: 0 0 0 3px var(--peri-700); }
+.profile-switch-note .icon { width: 12px; height: 12px; margin-top: 4px; }
+/* Вход и регистрация — лёгкие вкладки под основными. */
+.veyra-forms { display: flex; gap: 24px; padding: 0 3px; box-shadow: inset 0 -3px 0 var(--plum-800); }
+.veyra-forms button { height: 30px; padding: 0 2px; border: 0; background: none; color: var(--plum-300); font: 12px/1 var(--mc); word-spacing: -.3em; transition: color .15s; }
+.veyra-forms button:hover { color: var(--cream); }
+.veyra-forms button.is-active { color: var(--cream); box-shadow: inset 0 -3px 0 var(--peach); }
+.veyra-intro { margin: 12px 0 15px; }
+.veyra-form .form-field { margin-bottom: 12px; }
+.veyra-form .field-pair { gap: 15px; }
+.veyra-form .field-pair .form-field { margin-bottom: 9px; }
+.veyra-rule { display: flex; align-items: baseline; gap: 8px; color: var(--soft); font-size: 12px; line-height: 1.5; }
+.veyra-rule::before { content: ""; width: 6px; height: 6px; flex: none; background: var(--plum-400); }
+.veyra-rule.is-valid { color: var(--sage-300); }
+.veyra-forgot { display: block; }
+.veyra-forgot::before { content: none; }
+.veyra-forgot .text-button { display: inline; padding: 0; font: inherit; color: var(--peri-300); text-decoration: underline; text-underline-offset: 2px; }
+.veyra-rule.is-valid::before { background: var(--sage); }
+.veyra-rule.is-invalid { color: var(--coral-300); }
+.veyra-rule.is-invalid::before { background: var(--coral); }
+.form-field:has(.field-error) .veyra-rule { display: none; }
+.veyra-submit { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-top: 15px; padding: 3px; }
+.veyra-error { margin: 15px 3px 3px; scroll-margin: 18px 0; }
+.veyra-signed { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 21px; align-items: start; padding: 3px; }
+.veyra-stage { position: relative; width: 168px; height: 224px; overflow: hidden; background: radial-gradient(ellipse 62% 30% at 50% 88%, color-mix(in srgb, var(--peach) 24%, transparent), transparent 72%), var(--inset) url("../assets/textures/deep.png") 0 0 / 64px 64px; --hi: var(--inset-hi); --lo: var(--inset-lo); box-shadow: var(--frame-out), var(--frame-in); }
+.veyra-stage-label { position: absolute; z-index: 1; left: 50%; bottom: 9px; translate: -50% 0; width: max-content; max-width: calc(100% - 18px); padding: 3px 7px; background: var(--plum-950); color: var(--cream-dim); font: 10px/1.25 var(--mc); text-align: center; text-wrap: balance; word-spacing: -.3em; pointer-events: none; }
+.veyra-side { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; min-width: 0; }
+.veyra-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 18px/1.2 var(--mc); font-weight: 400; word-spacing: -.3em; }
+.veyra-uuid { margin-top: -8px; color: var(--soft); font: 11px/1.4 Consolas, monospace; user-select: text; }
+.veyra-play { width: 100%; }
+.veyra-skin-row { display: flex; gap: 12px; width: 100%; padding-right: 3px; }
+.veyra-skin-row .button { flex: 1; min-width: 0; }
+.veyra-model { display: flex; width: 100%; }
+.veyra-model button { flex: 1; min-width: 0; padding: 0 6px; }
+.veyra-model button:disabled { color: var(--plum-500); background: transparent; box-shadow: none; }
+.veyra-links { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 0 3px; }
+.veyra-logout { color: var(--coral-300); }
+.veyra-logout:hover:not(:disabled) { color: var(--coral); }
+/* Ссылки сообщества рядом с версией в нижней панели. */
+.community { display: flex; align-items: center; gap: 9px; flex: none; }
+.community-button { display: grid; place-items: center; width: 33px; height: 33px; padding: 0; border: 0; background: var(--plum-600); color: var(--cream-dim); --hi: var(--panel-hi); --lo: var(--panel-lo); box-shadow: var(--frame-out), var(--frame-in); transition: color .15s, background .15s; }
+.community-button .icon { width: 12px; height: 12px; }
+.community-button:hover, .community-button:focus-visible { --line: var(--cream); --hi: var(--peri-300); --lo: var(--peri-600); background: var(--peri); color: var(--plum-950); }
+.community-button:active { --hi: var(--peri-600); --lo: var(--peri-300); }
 .nickname-row { display: flex; gap: 15px; align-items: center; padding-right: 3px; }
 .nickname-row input { min-width: 0; height: 42px; }
 .profile-hint { margin: 13px 0; color: var(--muted); font-size: 14px; line-height: 1.6; }

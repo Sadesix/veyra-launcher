@@ -30,8 +30,7 @@
 .is-halloween .intro { background: radial-gradient(ellipse 70% 45% at 50% 108%, rgba(236, 138, 58, .24), transparent 70%), radial-gradient(ellipse 50% 40% at 20% 0%, rgba(140, 92, 204, .18), transparent 70%), var(--plum-900) url("../assets/textures/deep.png") 0 0 / 64px 64px; }
 .is-halloween .intro::before { content: ""; position: absolute; top: 12%; right: 16%; width: 72px; height: 72px; background: linear-gradient(#c9b993 0 0) 15px 18px / 15px 12px no-repeat, linear-gradient(#c9b993 0 0) 42px 39px / 18px 15px no-repeat, linear-gradient(#c9b993 0 0) 21px 48px / 9px 9px no-repeat, #f2e6cc; box-shadow: 0 0 0 3px #110b16, 0 0 60px rgba(242, 230, 204, .3); }
 .is-halloween .intro-stage { position: relative; }
-.intro-bat { position: absolute; left: calc(50% - 12px); top: 34%; color: var(--peri-300); animation: introOrbit 3.6s steps(36) infinite; animation-delay: calc(var(--i) * -1.2s); }
-.intro-bat svg { width: 24px; height: 24px; animation: batFlap .24s steps(2) infinite; }
+.intro-bat { position: absolute; left: calc(50% - 12px); top: 34%; color: var(--peri-300); --size: 24px; --flap: .3s; --phase: calc(var(--i) * -.11s); animation: introOrbit 3.6s steps(36) infinite; animation-delay: calc(var(--i) * -1.2s); }
 @keyframes introOrbit { from { transform: rotate(0deg) translateX(190px) rotate(0deg); } to { transform: rotate(360deg) translateX(190px) rotate(-360deg); } }
 
 /* ── Позади окна: пиксельная луна и мерцающие звёзды ── */
@@ -45,19 +44,39 @@
 .spooky-front { position: fixed; top: 62px; right: 0; bottom: 93px; left: 0; z-index: 30; pointer-events: none; overflow: hidden; }
 .spooky-web { position: absolute; top: 0; width: 120px; height: 120px; fill: none; stroke: rgba(242, 230, 204, .2); stroke-width: 1.2; shape-rendering: crispEdges; }
 .spooky-web.is-left { left: 0; }
-.spooky-web.is-right { right: 12px; transform: scaleX(-1); }
+.spooky-web.is-right { left: 0; width: 100%; height: 100%; transform: scaleX(-1); }
 .spooky-fog { position: absolute; left: 0; right: 0; bottom: 0; height: 120px; opacity: .55; }
 .spooky-fog i { position: absolute; inset: 0; background: radial-gradient(ellipse 130px 34px at 70px 92px, rgba(169, 139, 216, .2), transparent 70%) 0 0 / 280px 120px repeat-x; animation: fogDrift 46s linear infinite; }
 .spooky-fog i + i { background: radial-gradient(ellipse 170px 30px at 90px 104px, rgba(242, 230, 204, .1), transparent 70%) 0 0 / 360px 120px repeat-x; animation-duration: 70s; animation-direction: reverse; }
 @keyframes fogDrift { to { background-position-x: 720px; } }
-.spooky-spider { position: absolute; top: 0; left: 61%; display: flex; flex-direction: column; align-items: center; padding: 0; border: 0; background: none; color: var(--plum-300); pointer-events: auto; cursor: pointer; animation: spiderBob 4.6s ease-in-out infinite; transition: transform .9s steps(9); }
-.spooky-spider i { width: 1px; height: 46px; background: rgba(242, 230, 204, .4); }
-.spooky-spider svg { width: 22px; height: 22px; margin-top: -2px; filter: drop-shadow(0 0 4px rgba(169, 139, 216, .6)); }
-.spooky-spider.is-climbing { transform: translateY(-74px); }
-@keyframes spiderBob { 0%, 100% { translate: 0 0; } 50% { translate: 0 12px; } }
+/* Паук висит на узле правой паутины (--knot-x/--knot-y ставит halloween.js). Верх нити привязан к узлу:
+   качается только длина нити (--bob), паук держится за её конец, а щелчок сматывает нить (--pull) и прячет его в паутине.
+   Без @property переменные берут запасные значения, а без round() узел и длина считаются обычным calc(). */
+@property --bob { syntax: "<length>"; inherits: true; initial-value: 0px; }
+@property --pull { syntax: "<number>"; inherits: true; initial-value: 0; }
+.spooky-corner { --web: 120px; position: absolute; top: 0; right: 12px; width: var(--web); height: var(--web); }
+.spooky-drop { --rope: 46px; --len: calc((var(--rope) + var(--bob, 0px)) * (1 - var(--pull, 0))); position: absolute; left: calc(var(--web) * var(--knot-x) - 1px); top: calc(var(--web) * var(--knot-y)); animation: spiderBob 4.6s ease-in-out infinite; transition: --pull 1.3s cubic-bezier(.45, 0, .35, 1); }
+@supports (width: round(1px, 1px)) {
+  .spooky-drop { --len: round(calc((var(--rope) + var(--bob, 0px)) * (1 - var(--pull, 0))), 1px); left: round(calc(var(--web) * var(--knot-x) - 1px), 1px); top: round(calc(var(--web) * var(--knot-y)), 1px); }
+}
+.spooky-drop.is-climbing { --pull: 1; }
+/* Без @property длина нити не плавнеет, а прыгает: такой паук просто висит (класс ставит halloween.js). */
+.spooky-drop.is-still { animation: none; }
+.spooky-thread { position: absolute; left: 0; top: 0; width: 2px; height: var(--len); background: rgba(242, 230, 204, .34); }
+.spooky-spider { position: absolute; left: -11px; top: 0; width: 24px; height: 24px; padding: 0; border: 0; background: none; color: var(--plum-300); pointer-events: auto; cursor: pointer; translate: 0 calc(var(--len) - 3px); }
+.spooky-spider svg { display: block; width: 24px; height: 24px; filter: drop-shadow(0 0 4px rgba(169, 139, 216, .6)); }
+.spooky-spider:focus-visible { outline: none; }
+@keyframes spiderBob { 0%, 100% { --bob: 0px; } 50% { --bob: 12px; } }
 .spooky-bat { position: absolute; left: 0; top: 0; color: #0d0810; filter: drop-shadow(0 0 1px rgba(242, 230, 204, .55)) drop-shadow(0 0 6px rgba(236, 138, 58, .35)); }
-.spooky-bat svg { width: var(--size, 24px); height: var(--size, 24px); animation: batFlap .22s steps(2) infinite; }
-@keyframes batFlap { 50% { transform: scaleY(.45); } }
+
+/* ── Мыши: полоска из четырёх кадров, steps(4) листает её, а тело подпрыгивает в такт взмахам ── */
+/* При планировании (is-gliding) крылья расправлены: виден средний кадр. */
+.bat-sprite { display: block; width: var(--size, 24px); height: var(--size, 24px); overflow: hidden; animation: batBob var(--flap, .36s) step-end var(--phase, 0s) infinite; }
+.bat-sprite .bat-strip { display: block; width: 400%; height: 100%; animation: batFlap var(--flap, .36s) steps(4) var(--phase, 0s) infinite; }
+.is-gliding .bat-sprite { animation: none; }
+.is-gliding .bat-sprite .bat-strip { animation: none; transform: translateX(-25%); }
+@keyframes batFlap { to { transform: translateX(-100%); } }
+@keyframes batBob { 0% { translate: 0 1px; } 25%, 75% { translate: 0 0; } 50% { translate: 0 -1px; } }
 .spooky-ghost { position: absolute; left: 0; top: 0; width: 44px; height: 44px; padding: 0; border: 0; background: none; color: var(--cream); pointer-events: auto; cursor: pointer; filter: drop-shadow(0 0 10px rgba(242, 230, 204, .5)); }
 .spooky-ghost svg { width: 44px; height: 44px; }
 .spooky-ghost:focus-visible { outline: none; }
@@ -78,10 +97,16 @@
 .hero-lantern.is-small { right: 92px; animation-delay: -1.1s; }
 .hero-lantern.is-small svg { width: 30px; height: 30px; }
 .is-halloween .wordmark { position: relative; align-self: flex-start; }
-.wordmark-bat { position: absolute; left: calc(100% + 5px); top: -7px; color: var(--peri); }
-.wordmark-bat svg { width: 15px; height: 15px; animation: batFlap .5s steps(2) infinite; }
+.wordmark-bat { position: absolute; left: calc(100% + 5px); top: -7px; color: var(--peri); --size: 15px; --flap: .56s; }
 
-/* В узком окне украшения не спорят с содержимым. */
+/* В узком окне украшения не спорят с содержимым: луны и фонарей нет, паутина с пауком меньше. */
 @media (max-width: 1180px) {
-  .spooky-moon, .hotbar-lantern, .spooky-web.is-right { display: none; }
+  .spooky-moon, .hotbar-lantern { display: none; }
+  .spooky-corner { --web: 84px; right: 6px; }
+  .spooky-drop { --rope: 34px; }
+}
+/* Без лишнего движения: мыши не машут крыльями (виден средний кадр), паук не качается. */
+@media (prefers-reduced-motion: reduce) {
+  .bat-sprite, .bat-sprite .bat-strip, .spooky-drop { animation: none; }
+  .bat-sprite .bat-strip { transform: translateX(-25%); }
 }

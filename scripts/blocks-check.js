@@ -28,7 +28,7 @@ async function main() {
   assert.equal(serverConfig({ port: 80, gamemode: 'god' }).port, 25565, 'Saved values that are no longer valid fall back to defaults');
   const sample = serverConfig({ levelName: 'Мой мир', motd: 'Привет, друзья!', seed: 'veyra', gamemode: 'creative', difficulty: 'hard', hardcore: true, maxPlayers: 12, viewDistance: 6 }, { strict: true });
   const written = serverProperties(sample, 25570);
-  assert.equal(written['server-port'], '25570'); assert.equal(written['online-mode'], 'false'); assert.match(written.motd, /^[\x20-\x7e]+$/, 'Non-Latin text must be escaped for old and new servers');
+  assert.equal(written['server-port'], '25570'); assert.equal(written['online-mode'], 'false'); assert.equal(written['white-list'], 'false', 'Since 26.3 the white list is on by default and would lock everyone out'); assert.match(written.motd, /^[\x20-\x7e]+$/, 'Non-Latin text must be escaped for old and new servers');
   assert.equal(serverProperties(serverConfig({}), 25565).motd, undefined, 'An empty description keeps the value already stored by the server');
   assert.deepEqual(importProperties('#Minecraft server properties\n' + Object.entries(written).map(([key, value]) => key + '=' + value).join('\n') + '\nunknown=1\n'), { ...sample, port: 25570 });
 
@@ -184,9 +184,9 @@ async function main() {
     await page.waitForFunction(() => window.__blocks.server?.status === 'ready', null, { timeout: 30000 });
     let state = await page.evaluate(() => window.launcher.getState());
     assert.equal(state.server.port, port); assert.equal(state.server.memoryGb, 1); assert.equal(state.server.config.gamemode, 'creative');
-    assert.deepEqual(state.instances[0].serverConfig, { levelName: 'Мир друзей', seed: 'veyra', gamemode: 'creative', difficulty: 'hard', hardcore: false, allowFlight: true, maxPlayers: 6, viewDistance: 10, motd: 'Привет из Veyra', port, memoryGb: null });
+    assert.deepEqual(state.instances[0].serverConfig, { levelName: 'Мир друзей', seed: 'veyra', gamemode: 'creative', difficulty: 'hard', hardcore: false, allowFlight: true, maxPlayers: 6, viewDistance: 10, motd: 'Привет из Veyra', port, memoryGb: null, veyraLogin: false });
     const properties = fs.readFileSync(path.join(game, '.veyra-server', 'server.properties'), 'utf8');
-    for (const line of ['server-port=' + port, 'gamemode=creative', 'difficulty=hard', 'max-players=6', 'allow-flight=true', 'level-seed=veyra', 'online-mode=false', 'spawn-protection=3']) assert.ok(properties.split(/\r?\n/).includes(line), line);
+    for (const line of ['server-port=' + port, 'gamemode=creative', 'difficulty=hard', 'max-players=6', 'allow-flight=true', 'level-seed=veyra', 'online-mode=false', 'white-list=false', 'spawn-protection=3']) assert.ok(properties.split(/\r?\n/).includes(line), line);
     assert.deepEqual(importProperties(properties).motd, 'Привет из Veyra'); assert.equal(importProperties(properties).levelName, 'Мир друзей');
     await new Promise((resolve, reject) => { const socket = net.connect(port, '127.0.0.1'); socket.setTimeout(3000, () => { socket.destroy(); reject(new Error('The configured port did not accept a connection')); }); socket.once('connect', () => { socket.destroy(); resolve(); }); socket.once('error', reject); });
     await assert.rejects(page.evaluate(() => window.launcher.saveServerConfig('blocks', { port: 25570 })), /Остановите сервер/);

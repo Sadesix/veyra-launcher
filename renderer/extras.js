@@ -31,9 +31,35 @@
     if (smile) { dot(2, 6, shade); dot(5, 6, shade); }
   }
   window.veyraHead = head;
+  // Свой скин открывается заранее: при ошибке drawHead взял бы скин Veyra по умолчанию, а в игре у игрока загруженный скин.
+  // Поэтому для незагрузившегося своего скина рисуется голова по нику — нейтральная заглушка.
+  const skinLoads = url => new Promise((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = 'anonymous';
+    image.onload = resolve; image.onerror = () => reject(new Error('Скин не загрузился'));
+    image.src = url;
+  });
+  // С аккаунтом Veyra голова берётся из его скина, а без своего — из скина Veyra по умолчанию, как модель в профиле,
+  // аватар в кабинете и сам игрок в игре; локальный ник рисуется по нику. Приставки ключей не дают нику совпасть со скином.
   function renderHeads() {
-    const name = data?.account.name || 'Player';
-    for (const canvas of document.querySelectorAll('canvas[data-head]')) if (canvas.dataset.head !== name) { canvas.dataset.head = name; head(canvas, name); }
+    const name = data?.account.name || 'Player', veyra = data?.account.mode === 'veyra' && window.VeyraSkin, skin = veyra ? data.account.veyra?.skin : null;
+    const key = !veyra ? 'nick:' + name : skin ? 'skin:' + skin.url : 'default:';
+    let loads = null;
+    for (const canvas of document.querySelectorAll('canvas[data-head]')) {
+      if (canvas.dataset.head === key) continue;
+      canvas.dataset.head = key;
+      if (!veyra) { head(canvas, name); continue; }
+      // Скин грузится не сразу: голова рисуется в запасной холст и переносится, только если профиль за это время не сменился.
+      const buffer = document.createElement('canvas');
+      buffer.width = canvas.width; buffer.height = canvas.height;
+      const drawn = skin ? (loads ||= skinLoads(skin.url)).then(() => window.VeyraSkin.drawHead(buffer, skin.url, skin.slim)) : window.VeyraSkin.drawHead(buffer, null, false);
+      drawn.then(() => {
+        if (canvas.dataset.head !== key) return;
+        const context = canvas.getContext('2d');
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(buffer, 0, 0);
+      }, () => { if (canvas.dataset.head === key) head(canvas, name); });
+    }
   }
 
   // ── Подсказка предмета следует за курсором и живёт в верхнем слое, поверх окон ──

@@ -43,8 +43,19 @@ async function main() {
       assert.equal(await page.locator('#microsoft-start').isVisible(), false);
       assert.equal(await page.locator('#microsoft-client-id').isVisible(), false);
       assert.equal(await page.locator('#profile-name-input').isVisible(), true);
+      // Видны две вкладки: локальный ник (открыт и выбран для игры) и аккаунт Veyra.
+      assert.equal(await page.locator('[data-account-mode="local"]').getAttribute('aria-selected'), 'true');
+      assert.equal(await page.locator('[data-account-mode="local"]').evaluate(node => node.classList.contains('is-current')), true);
+      assert.equal(await page.locator('[data-account-mode="veyra"]').isVisible(), true);
+      await page.locator('[data-account-mode="veyra"]').click();
+      assert.equal(await page.locator('#veyra-login-form').isVisible(), true);
+      assert.equal(await page.locator('#profile-name-input').isVisible(), false);
+      assert.equal((await page.evaluate(() => window.launcher.getState())).account.mode, 'local', 'Switching tabs does not switch the account');
+      await page.locator('[data-account-mode="local"]').click();
+      assert.equal(await page.locator('#profile-name-input').isVisible(), true);
+      await assert.rejects(page.evaluate(() => window.launcher.selectAccount('veyra')), /Сначала войдите в аккаунт Veyra/);
       assert.deepEqual(errors, []);
-      process.stdout.write('OK: quick nickname works; Microsoft tab, login and configuration stay hidden. Integration code retained.\n');
+      process.stdout.write('OK: quick nickname works; local and Veyra tabs, tabs do not switch the account; Microsoft tab, login and configuration stay hidden. Integration code retained.\n');
       return;
     }
     await page.locator('[data-account-mode="microsoft"]').click();

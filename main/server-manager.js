@@ -19,7 +19,7 @@ async function fabricSide(file) {
   finally { zip.close(); }
 }
 class ServerManager {
-  constructor({ fetch: fetcher = (...args) => fetch(...args), spawn = (...args) => require('node:child_process').spawn(...args), onChange = () => {}, port = 25565, version = '0.8.2' } = {}) { this.fetch = fetcher; this.spawn = spawn; this.onChange = onChange; this.port = port; this.agent = 'VeyraLauncher/' + version; this.run = null; this.state = null; this.partial = ''; }
+  constructor({ fetch: fetcher = (...args) => fetch(...args), spawn = (...args) => require('node:child_process').spawn(...args), onChange = () => {}, port = 25565, version = '0.9.0' } = {}) { this.fetch = fetcher; this.spawn = spawn; this.onChange = onChange; this.port = port; this.agent = 'VeyraLauncher/' + version; this.run = null; this.state = null; this.partial = ''; }
   update(patch = {}) { this.state = { ...this.state, ...patch }; this.onChange(); }
   output(bytes) { const text = String(bytes).replace(/\x1b\[[0-9;]*m/g, ''); this.state.lines = (this.state.lines + text).slice(-60000);
     if (this.state.status === 'starting' && /Done \([\d.,]+s\)!|For help, type "help"/.test(this.state.lines)) { this.state.status = 'ready'; this.state.readyAt = Date.now(); }
@@ -85,7 +85,8 @@ class ServerManager {
     for (const name of ['config', 'defaultconfigs']) { const source = path.join(instance.directory, name), destination = path.join(directory, name); if (!await fs.stat(destination).catch(() => null)) await fs.cp(source, destination, { recursive: true, filter: async file => !(await fs.lstat(file)).isSymbolicLink() }).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
     this.update({ skipped });
   }
-  async start(instance, metadata, java, memoryGb, acceptEula, signal, options) {
+  // jvm — дополнительные аргументы Java до команды запуска, например агент входа через Veyra.
+  async start(instance, metadata, java, memoryGb, acceptEula, signal, options, jvm = []) {
     if (this.run) throw new Error('Сервер уже работает. Сначала остановите его');
     const directory = path.join(instance.directory, '.veyra-server'); await plain(directory);
     const accepted = /(?:^|\n)eula\s*=\s*true/.test(await fs.readFile(path.join(directory, 'eula.txt'), 'utf8').catch(() => ''));
@@ -123,7 +124,7 @@ class ServerManager {
       for (const [key, value] of Object.entries(serverProperties(config, port))) { properties = properties.replace(new RegExp('^' + key + '=.*(?:\\r?\\n|$)', 'gm'), ''); properties += '\n' + key + '=' + value + '\n'; }
       await fs.writeFile(path.join(directory, 'server.properties'), properties);
       await portFree(port); signal.throwIfAborted();
-      const child = this.spawn(java, ['-Xms512M', '-Xmx' + memoryGb + 'G', ...args, 'nogui'], { cwd: directory, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = this.spawn(java, ['-Xms512M', '-Xmx' + memoryGb + 'G', ...jvm, ...args, 'nogui'], { cwd: directory, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
       this.run = child; this.update({ status: 'starting', pid: child.pid });
       child.stdin?.on('error', error => this.output(error.message + '\n')); child.stdout?.on('data', bytes => this.output(bytes)); child.stderr?.on('data', bytes => this.output(bytes));
       child.once('error', error => { if (this.run !== child) return; this.run = null; this.update({ status: 'error', error: error.message, players: [] }); });

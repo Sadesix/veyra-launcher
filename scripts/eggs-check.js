@@ -58,7 +58,7 @@ async function main() {
     // Экран отладки F3.
     await page.keyboard.press('F3');
     await page.locator('#debug-screen').waitFor({ state: 'visible' });
-    assert.match(await page.locator('#debug-left').textContent(), /Veyra 0\.8\.\d+/);
+    assert.match(await page.locator('#debug-left').textContent(), /Veyra \d+\.\d+\.\d+/);
     assert.match(await page.locator('#debug-left').textContent(), /Сборок: 2/);
     await waitTrophy('debug');
     await page.keyboard.press('F3');

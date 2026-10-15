@@ -143,7 +143,7 @@
                     </div></div>
                     <label class="switch-field"><input id="server-hardcore" type="checkbox" role="switch" /><span class="switch-track"></span><span>Хардкор — одна жизнь на игрока</span></label>
                     <label class="switch-field"><input id="server-flight" type="checkbox" role="switch" /><span class="switch-track"></span><span>Разрешить полёт в выживании</span></label>
-                    <p class="builder-note">Локальные ники без проверки аккаунта. Режим и сложность применяются при запуске.</p>
+                    <p class="builder-note" id="server-auth-note">Локальные ники без проверки аккаунта. Режим и сложность применяются при запуске.</p>
                   </section>
                   <section class="glass-card builder-card">
                     <header><span class="step">3</span><div><h3>Сеть</h3><p>Как сервер увидят друзья</p></div></header>
@@ -152,6 +152,7 @@
                       <label class="form-field"><span>Порт</span><input id="server-port" type="number" min="1024" max="65535" step="1" required /></label>
                       <label class="form-field"><span>Игроков</span><input id="server-max-players" type="number" min="1" max="100" step="1" required /></label>
                     </div>
+                    <label class="switch-field veyra-login-switch"><input id="server-veyra-login" type="checkbox" role="switch" /><span class="switch-track"></span><span><strong>Вход через Veyra</strong><small>Пускает только игроков с аккаунтом Veyra — зато их скины видны всем.</small></span></label>
                     <p class="builder-note">Сервер слушает все сетевые адреса компьютера. Доступ из интернета зависит от роутера и брандмауэра.</p>
                   </section>
                   <section class="glass-card builder-card">
@@ -184,7 +185,7 @@
 
             <aside class="server-side">
               <section class="glass-card sessions-section"><div class="sessions-section-head"><h3>Игроки на сервере</h3><span class="server-count" id="server-player-count">0</span></div><div id="server-players"></div></section>
-              <section class="glass-card sessions-section"><div class="sessions-section-head"><h3>Запущенные клиенты</h3><button class="text-button" id="sessions-add" type="button">+ Ещё клиент</button></div><div id="sessions-list"></div><small>Дополнительные клиенты получают отдельные папки и разные локальные ники.</small></section>
+              <section class="glass-card sessions-section"><div class="sessions-section-head"><h3>Запущенные клиенты</h3><button class="text-button" id="sessions-add" type="button">+ Ещё клиент</button></div><div id="sessions-list"></div><small id="sessions-note">Дополнительные клиенты получают отдельные папки и разные локальные ники.</small></section>
               <details class="glass-card" id="server-skipped" hidden><summary id="server-skipped-title"></summary><ul id="server-skipped-list"></ul></details>
             </aside>
           </div>
@@ -242,7 +243,7 @@
     </main>
 
     <footer class="footerbar">
-      <div class="footer-left"><span class="footer-brand">veyra <b id="app-version">0.8.2</b></span><span class="footer-status"><i></i><span id="footer-message">Готовим лаунчер…</span></span><div class="toast" id="toast" role="status" hidden><svg class="icon"><use href="#i-check"/></svg><span id="toast-text"></span><button type="button" id="toast-undo" hidden>Отменить</button></div></div>
+      <div class="footer-left"><span class="footer-brand">veyra <b id="app-version">0.9.0</b></span><span class="community" role="group" aria-label="Сообщество Veyra"><button class="community-button is-telegram" type="button" data-community="telegram" aria-label="Telegram-канал Veyra" data-tip="Telegram-канал Veyra" data-tip-lore="Новости, обновления и ответы"><svg class="icon"><use href="#i-telegram"/></svg></button><button class="community-button is-discord" type="button" data-community="discord" aria-label="Discord-сервер Veyra" data-tip="Discord-сервер Veyra" data-tip-lore="Общение, помощь и друзья для игры"><svg class="icon"><use href="#i-discord"/></svg></button></span><span class="footer-status"><i></i><span id="footer-message">Готовим лаунчер…</span></span><div class="toast" id="toast" role="status" hidden><svg class="icon"><use href="#i-check"/></svg><span id="toast-text"></span><button type="button" id="toast-undo" hidden>Отменить</button></div></div>
       <aside class="icon-rail" aria-label="Навигация">
         <div class="xp" id="xp" data-tip="Уровень игрока" data-tip-lore="Один уровень — один час в игре"><span class="xp-level" id="xp-level">0</span><div class="xp-track"><span id="xp-fill"></span></div><span class="xp-label" id="xp-label" hidden></span></div>
         <div class="hotbar">
@@ -265,12 +266,49 @@
     <div class="modal-head"><span class="eyebrow">ВАШ ПРОФИЛЬ</span><button type="button" class="modal-close" data-close="profile-dialog" aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div>
     <div class="profile-heading"><div class="profile-avatar"><canvas class="player-head" data-head width="8" height="8"></canvas><span id="profile-avatar" hidden>P</span></div><div><h2 id="profile-active-name">Player</h2><p id="profile-active-mode">Локальный профиль</p></div></div>
     <p class="profile-error" id="profile-feedback" role="alert" hidden></p>
-    <div class="account-tabs" id="account-tabs" hidden><button class="is-selected" type="button" data-account-mode="local"><svg class="icon"><use href="#i-user"/></svg>Локальный</button><button type="button" data-account-mode="microsoft"><svg class="icon"><use href="#i-microsoft"/></svg>Microsoft</button></div>
-    <div id="profile-local-panel">
+    <div class="account-tabs" id="account-tabs" role="tablist" aria-label="Профиль для игры"><button class="is-selected" type="button" role="tab" id="profile-tab-local" aria-controls="profile-local-panel" aria-selected="true" data-account-mode="local"><svg class="icon"><use href="#i-user"/></svg>Локальный ник<i class="tab-mark" aria-hidden="true"></i></button><button type="button" role="tab" id="profile-tab-veyra" aria-controls="profile-veyra-panel" aria-selected="false" tabindex="-1" data-account-mode="veyra"><svg class="icon"><use href="#i-crown"/></svg>Аккаунт Veyra<i class="tab-mark" aria-hidden="true"></i></button><button type="button" role="tab" id="profile-tab-microsoft" aria-controls="profile-microsoft-panel" aria-selected="false" tabindex="-1" data-account-mode="microsoft" hidden><svg class="icon"><use href="#i-microsoft"/></svg>Microsoft<i class="tab-mark" aria-hidden="true"></i></button></div>
+    <div id="profile-local-panel" role="tabpanel" aria-labelledby="profile-tab-local">
       <form id="profile-name-form"><label class="form-field"><span>Ваш ник в игре</span><div class="nickname-row"><input id="profile-name-input" type="text" minlength="3" maxlength="16" pattern="[A-Za-z0-9_]{3,16}" autocomplete="off" spellcheck="false" required aria-label="Локальный никнейм" /><button class="button button-primary" type="submit"><svg class="icon"><use href="#i-check"/></svg>Сохранить</button></div><small id="profile-nickname-hint">Латинские буквы, цифры и _. Enter сохраняет ник.</small></label></form>
-      <label class="toggle-row nickname-switch"><span><strong>Разрешить любые символы</strong><small>Кириллица, пробелы и эмодзи</small></span><input id="profile-any-symbols" type="checkbox" role="switch" /><i></i></label><p class="profile-hint">Локальный профиль подходит для одиночной игры. При смене ника Minecraft создаёт другой локальный UUID, а голова игрока рисуется заново.</p>
+      <label class="toggle-row nickname-switch"><span><strong>Разрешить любые символы</strong><small>Кириллица, пробелы и эмодзи</small></span><input id="profile-any-symbols" type="checkbox" role="switch" /><i></i></label>
+      <p class="profile-switch-note" id="profile-local-note" hidden><svg class="icon"><use href="#i-info"/></svg><span id="profile-local-note-text">Сейчас в игре — аккаунт Veyra. «Сохранить» вернёт игру на локальный ник.</span></p>
+      <p class="profile-hint">Локальный ник — для одиночной игры и серверов без проверки. В игре у него скин по умолчанию, а со сменой ника меняется и UUID в мирах.</p>
     </div>
-    <div id="profile-microsoft-panel" hidden>
+    <div id="profile-veyra-panel" role="tabpanel" aria-labelledby="profile-tab-veyra" hidden>
+      <div id="veyra-guest">
+        <div class="veyra-forms" role="group" aria-label="Вход или регистрация"><button type="button" class="is-active" data-veyra-form="login">Вход</button><button type="button" data-veyra-form="register">Регистрация</button></div>
+        <p class="profile-hint veyra-intro">Ник с паролем на veyra-launcher.com. Скин виден в игре на любой версии Minecraft.</p>
+        <form id="veyra-login-form" class="veyra-form" autocomplete="on">
+          <label class="form-field"><span>Ник аккаунта</span><input id="veyra-login-name" type="text" maxlength="16" autocomplete="username" spellcheck="false" required /></label>
+          <label class="form-field"><span>Пароль</span><input id="veyra-login-password" type="password" maxlength="128" autocomplete="current-password" required /></label>
+          <div class="veyra-submit"><button class="button button-primary" type="submit" id="veyra-login-submit"><svg class="icon"><use href="#i-arrow"/></svg><span>Войти</span></button><button class="text-button" type="button" data-veyra-form="register">Нет аккаунта? Создать</button></div>
+          <small class="veyra-rule veyra-forgot">Забыли пароль? Восстановить его нельзя, но ник можно освободить: <button class="text-button" type="button" data-community="telegram">напишите нам в Telegram</button>.</small>
+        </form>
+        <form id="veyra-register-form" class="veyra-form" hidden>
+          <label class="form-field"><span>Ник аккаунта <output id="veyra-name-count">0 / 16</output></span><input id="veyra-register-name" type="text" maxlength="16" autocomplete="username" spellcheck="false" required /><small class="veyra-rule" id="veyra-name-rule">3–16 символов: латинские буквы, цифры и _. Ник потом не сменить.</small></label>
+          <div class="field-pair">
+            <label class="form-field"><span>Пароль</span><input id="veyra-register-password" type="password" maxlength="128" autocomplete="new-password" required /></label>
+            <label class="form-field"><span>Ещё раз</span><input id="veyra-register-confirm" type="password" maxlength="128" autocomplete="new-password" required /></label>
+          </div>
+          <small class="veyra-rule" id="veyra-password-rule">Пароль — не меньше 6 символов.</small>
+          <small class="veyra-rule veyra-forgot">Пароль не восстановить — почты у аккаунта нет. Запишите его.</small>
+          <div class="veyra-submit"><button class="button button-primary" type="submit" id="veyra-register-submit"><svg class="icon"><use href="#i-check"/></svg><span>Создать аккаунт</span></button><button class="text-button" type="button" data-veyra-form="login">Уже есть аккаунт</button></div>
+        </form>
+      </div>
+      <div class="veyra-signed" id="veyra-signed" hidden>
+        <div class="veyra-stage" id="veyra-stage"><span class="veyra-stage-label" id="veyra-stage-label">Скин Veyra по умолчанию</span></div>
+        <div class="veyra-side">
+          <span class="account-badge" id="veyra-badge"><svg class="icon"><use href="#i-check"/></svg>Играете с этим аккаунтом</span>
+          <strong class="veyra-name" id="veyra-name"></strong>
+          <small class="veyra-uuid" id="veyra-uuid"></small>
+          <button class="button button-primary veyra-play" type="button" id="veyra-play"><svg class="icon"><use href="#i-play"/></svg>Играть с этим аккаунтом</button>
+          <div class="veyra-skin-row"><button class="button button-secondary" type="button" id="veyra-upload"><svg class="icon"><use href="#i-image"/></svg>Загрузить скин</button><button class="button-icon" type="button" id="veyra-remove" aria-label="Удалить скин" data-tip="Удалить скин" data-tip-lore="В игре будет скин Veyra по умолчанию"><svg class="icon"><use href="#i-trash"/></svg></button></div>
+          <div class="segmented veyra-model" role="group" aria-label="Модель скина"><button type="button" data-skin-model="classic">Классическая</button><button type="button" data-skin-model="slim">Тонкая</button></div>
+          <div class="veyra-links"><button class="text-button" type="button" id="veyra-cabinet">Личный кабинет <svg class="icon"><use href="#i-arrow"/></svg></button><button class="text-button veyra-logout" type="button" id="veyra-logout">Выйти</button></div>
+        </div>
+      </div>
+      <p class="profile-error veyra-error" id="veyra-error" role="alert" hidden></p>
+    </div>
+    <div id="profile-microsoft-panel" role="tabpanel" aria-labelledby="profile-tab-microsoft" hidden>
       <div class="microsoft-account" id="microsoft-signed" hidden><span class="account-badge"><svg class="icon"><use href="#i-check"/></svg>Minecraft Java</span><strong id="microsoft-name"></strong><small id="microsoft-uuid"></small><div class="profile-actions"><button class="button button-secondary" type="button" id="microsoft-name-change"><svg class="icon"><use href="#i-edit"/></svg>Сменить ник на сайте</button><button class="button button-secondary" type="button" id="microsoft-refresh"><svg class="icon"><use href="#i-refresh"/></svg>Обновить</button></div><p class="profile-hint">Ник связан с Minecraft-профилем. После изменения на minecraft.net нажмите «Обновить».</p></div>
       <p class="profile-hint" id="microsoft-intro">Войдите с аккаунтом, которому доступна Minecraft Java Edition. Подтверждение откроется в вашем браузере.</p>
       <div class="device-login" id="device-login" hidden><span class="eyebrow">КОД ПОДТВЕРЖДЕНИЯ</span><div class="device-code-row"><strong id="microsoft-code"></strong><button class="button-icon" type="button" id="microsoft-copy" aria-label="Скопировать код" title="Скопировать код"><svg class="icon"><use href="#i-copy"/></svg></button></div><p id="microsoft-phase" role="status"></p><div class="profile-actions"><button class="button button-primary" type="button" id="microsoft-browser"><svg class="icon"><use href="#i-arrow"/></svg>Открыть Microsoft</button><button class="button button-secondary" type="button" id="microsoft-cancel">Отменить</button></div></div>
@@ -334,6 +372,7 @@
   </dialog>
 
   <dialog id="remove-dialog" class="modal modal-small"><div class="modal-head"><span class="eyebrow">ПОДТВЕРЖДЕНИЕ</span><button type="button" class="modal-close" data-close="remove-dialog" aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div><h2>Убрать сборку?</h2><p class="modal-intro">Сборка исчезнет из лаунчера. Её файлы переместятся в соседнюю папку <strong>trash</strong>, откуда их можно восстановить вручную.</p><div class="modal-actions"><button class="button button-secondary" type="button" data-close="remove-dialog">Отмена</button><button class="button button-danger" type="button" id="confirm-remove"><svg class="icon"><use href="#i-trash"/></svg>Убрать сборку</button></div></dialog>
+  <dialog id="veyra-remove-dialog" class="modal modal-small" aria-labelledby="veyra-remove-title"><div class="modal-head"><span class="eyebrow">ПОДТВЕРЖДЕНИЕ</span><button type="button" class="modal-close" data-close="veyra-remove-dialog" aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div><h2 id="veyra-remove-title">Удалить скин?</h2><p class="modal-intro">В игре и в лаунчере снова будет скин Veyra по умолчанию. Файл скина с сайта удалится — сохраните его, если он вам ещё нужен.</p><div class="modal-actions"><button class="button button-secondary" type="button" data-close="veyra-remove-dialog" id="veyra-remove-keep">Оставить</button><button class="button button-danger" type="button" id="confirm-veyra-remove"><svg class="icon"><use href="#i-trash"/></svg>Удалить</button></div></dialog>
 
   <div class="advancement" id="advancement" role="status" hidden><span class="advancement-frame"><svg class="icon"><use id="advancement-icon" href="#i-trophy"/></svg></span><div><small>Достижение получено!</small><strong id="advancement-title"></strong></div></div>
   <div class="mc-tooltip" id="tooltip" role="tooltip" hidden><strong id="tooltip-title"></strong><span id="tooltip-lore"></span></div>
@@ -368,6 +407,7 @@
   <div class="debug-screen" id="debug-screen" aria-hidden="true" hidden><div id="debug-left"></div><div id="debug-right"></div></div>
 
   <script src="./validation.js"></script>
+  <script src="./skin3d.js"></script>
   <script src="./renderer.js"></script>
   <script src="./content.js"></script>
   <script src="./server.js"></script>

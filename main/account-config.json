@@ -1,0 +1,14 @@
+{
+  "api": "https://veyra-launcher.com/api/index.php/",
+  "cabinet": "https://veyra-launcher.com/account/",
+  "telegram": "https://t.me/veyra_launcher",
+  "discord": "https://veyra-launcher.com/discord",
+  "authlib": {
+    "version": "1.2.8",
+    "sha256": "9c7f4343e6c82034958ffb48c14a2cb0c85928be7283103ce17da00c6d5a7b10",
+    "urls": [
+      "https://authlib-injector.yushi.moe/artifact/56/authlib-injector-1.2.8.jar",
+      "https://bmclapi2.bangbang93.com/mirrors/authlib-injector/artifact/56/authlib-injector-1.2.8.jar"
+    ]
+  }
+}
