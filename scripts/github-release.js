@@ -7,7 +7,7 @@ const { changelog } = require('./publish');
 // Выпуск на GitHub: тег v<версия> на текущем коммите, установщик и его копия с постоянным именем —
 // https://github.com/<владелец>/<репозиторий>/releases/latest/download/Veyra-Launcher-Setup.exe всегда ведёт на последнюю версию.
 //   npm run release:github   — выпустить уже собранный dist/Veyra-Launcher-Setup-<версия>.exe
-// Флаги: --draft (черновик), --file <путь>. Нужен GitHub CLI с выполненным «gh auth login».
+// Флаги: --draft (черновик), --file <путь>, --commit <sha>. Нужен GitHub CLI с выполненным «gh auth login».
 const root = path.join(__dirname, '..');
 const STABLE = 'Veyra-Launcher-Setup.exe';
 const option = name => { const index = process.argv.indexOf(name); return index >= 0 ? process.argv[index + 1] : ''; };
@@ -33,9 +33,11 @@ async function main() {
   // Выпуск должен совпадать с опубликованным кодом: незакоммиченные изменения в него не попадут.
   const dirty = run('git', ['status', '--porcelain', '--untracked-files=no']);
   if (dirty) throw new Error('Есть незакоммиченные изменения — закоммитьте их, чтобы выпуск совпадал с кодом на GitHub:\n' + dirty);
-  const commit = run('git', ['rev-parse', 'HEAD']);
   process.stdout.write('Отправляем коммиты на GitHub…\n');
   run('git', ['push', 'origin', 'HEAD']);
+  // --commit <sha> вешает тег на коммит, из которого собран установщик, если после сборки менялись только сайт или документы.
+  const commit = run('git', ['rev-parse', option('--commit') || 'HEAD']);
+  if (spawnSync('git', ['merge-base', '--is-ancestor', commit, 'HEAD'], { cwd: root, windowsHide: true }).status !== 0) throw new Error('Коммит ' + commit + ' не входит в отправленную ветку');
   const repo = run(cli, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']);
   const hash = sha256(file), size = fs.statSync(file).size;
   const notes = changelog(version);
