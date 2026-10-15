@@ -171,7 +171,9 @@ async function main() {
     fs.writeFileSync(skinFiles.second, skinPng({ skin: [217, 169, 140], hair: [141, 90, 77], eyes: [88, 118, 91], shirt: [142, 174, 145], pants: [60, 52, 62], slim: true }));
     const faceColor = { first: [232, 196, 168], second: [217, 169, 140] };
 
-    const options = halloween => ({ args: ['.'], cwd: workspace, timeout: 120000,
+    // Как другие проверки: путь к собранному «Veyra Launcher.exe» первым аргументом проверяет сборку, без него — исходники.
+    const packaged = process.argv[2] ? path.resolve(process.argv[2]) : undefined;
+    const options = halloween => ({ executablePath: packaged, args: packaged ? [] : ['.'], cwd: workspace, timeout: 120000,
       env: { ...env, VEYRA_TEST_DATA_DIR: data, VEYRA_ACCOUNT_API: ROOT, VEYRA_AUTHLIB_URL: jarUrl, VEYRA_AUTHLIB_SHA256: jarHash, VEYRA_HALLOWEEN: halloween ? 'season' : 'off', VEYRA_MICROSOFT_CLIENT_ID: '' } });
     const problems = [];
     // Скины, которых нарочно нет: их 404 в консоли ожидаем.
