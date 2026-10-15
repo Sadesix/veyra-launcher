@@ -71,20 +71,23 @@
     'Крипер? Показалось.', 'Место, где ты не был', 'F3 знает всё', 'Факелов много не бывает', 'Собери свой мир', 'Хорошего приключения!',
     '↑ ↑ ↓ ↓ ← → ← → B A', 'Ссс… набери snake', 'Тук-тук по логотипу'];
   const CREEPER = 'Крипер? Показалось.';
+  // В сезон Хеллоуина фразы берутся из праздничного набора halloween.js.
+  const lines = () => window.veyraHalloween?.active() ? window.veyraHalloween.phrases : phrases;
   let phrase = -1, flips = 0;
   function renderSplash(change = false) {
     const splash = el('splash'), shown = pref('splash', true);
     splash.hidden = !shown;
     if (!shown || !change && phrase >= 0) return;
     const value = new Uint32Array(1); crypto.getRandomValues(value);
-    phrase = (phrase < 0 ? value[0] : phrase + 1 + value[0] % (phrases.length - 1)) % phrases.length;
-    splash.textContent = phrases[phrase];
+    const list = lines();
+    phrase = (phrase < 0 ? value[0] : phrase + 1 + value[0] % (list.length - 1)) % list.length;
+    splash.textContent = list[phrase];
     if (change && !calm()) splash.animate([{ scale: .7, opacity: .2 }, { scale: 1.12 }, { scale: 1 }], { duration: 320, easing: 'steps(6)' });
   }
   // Крипер в приветствии взрывается от щелчка, а пятнадцать фраз подряд открывают «Болтуна».
   el('splash').addEventListener('click', () => {
     if (++flips === 15) unlock('chatterbox');
-    if (phrases[phrase] !== CREEPER) return renderSplash(true);
+    if (lines()[phrase] !== CREEPER) return renderSplash(true);
     unlock('creeper');
     if (calm()) return renderSplash(true);
     document.querySelector('.app-shell').animate([{ translate: '0 0' }, { translate: '-6px 3px' }, { translate: '5px -4px' }, { translate: '-4px -2px' }, { translate: '3px 4px' }, { translate: '0 0' }], { duration: 360, easing: 'steps(5)' });
@@ -174,6 +177,7 @@
     ['lan', 'link', 'Свои люди', 'Играть, пока работает свой сервер', s => s.server && s.clients >= 1],
     ['worldmaker', 'leaf', 'Создатель миров', 'Сохранить пять миров в одной сборке', s => s.worlds >= 5],
     ['modpacker', 'cpu', 'Модпакер', 'Включить двадцать пять модов в одной сборке', s => s.mods >= 25],
+    ['trick-or-treat', 'candy', 'Сладость или гадость', 'Поиграть в сезон Хеллоуина — с 15 октября по 2 ноября', s => s.halloween && s.clients >= 1],
     ['konami', 'gamepad', 'Тридцать жизней', 'Ввести код Konami', null, 'Код из эпохи картриджей'],
     ['debug', 'terminal', 'Всё знает F3', 'Открыть экран отладки', null, 'Одна клавиша знает всё — совсем как в игре'],
     ['snake', 'snake', 'Ссссс…', 'Найти спрятанную змейку', null, 'Кое-что ползучее можно просто набрать на клавиатуре'],
@@ -182,6 +186,7 @@
     ['woodpecker', 'eye', 'Дятел', 'Постучать по логотипу десять раз', null, 'Логотип любит внимание'],
     ['chatterbox', 'volume', 'Болтун', 'Перелистать пятнадцать фраз на главной', null, 'Фразы на главной не заканчиваются'],
     ['creeper', 'creeper', 'Показалось', 'Нажать на крипера в приветствии', null, 'Кто-то шипит рядом с приветствием'],
+    ['ghostbuster', 'ghost', 'Охотник за привидениями', 'Поймать призрака', null, 'В праздничные ночи по лаунчеру кто-то летает'],
     ['pumpkin', 'pumpkin', 'Тыквоголовый', 'Нажать на часы в Хеллоуин', null, 'Часы ведут себя странно в конце октября'],
     ['new-year', 'spark', 'С Новым годом!', 'Нажать на часы в новогоднюю ночь', null, 'Загляните в часы, когда всё в огоньках'],
   ];
@@ -196,6 +201,7 @@
       loaders: new Set(items.map(item => item.loader).filter(loader => loader !== 'vanilla')).size,
       oldSchool: items.some(item => { const match = /^1\.(\d+)(?:\.|$)/.exec(item.minecraftVersion || ''); return match && Number(match[1]) <= 12; }),
       session: Math.max(0, ...clients.map(run => Date.now() - run.startedAt)), worlds: seen.worlds, mods: seen.mods,
+      halloween: Boolean(window.veyraHalloween?.inSeason()),
     };
   }
   // Пасхалки открывают свои достижения сами; уже полученное повторно не засчитывается.
@@ -361,6 +367,7 @@
     if (event.type === 'content-changed') renderWorlds(true);
   });
   window.addEventListener('veyra:view', event => { if (event.detail.view === 'trophies') renderTrophies(); if (event.detail.view === 'home') renderWorlds(true); });
+  window.addEventListener('veyra:halloween', () => { phrase = -1; renderSplash(); });
   api.getState().then(state => { data ||= state; render(); }).catch(() => {});
   renderSplash(); renderClock();
   setInterval(() => { renderClock(); renderXp(); }, 5000);

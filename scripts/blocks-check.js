@@ -126,8 +126,8 @@ async function main() {
     await page.waitForFunction(() => Object.keys(window.__blocks.achievements).length >= 3);
     await page.keyboard.press('4');
     assert.deepEqual(Object.keys((await page.evaluate(() => window.launcher.getState())).achievements).sort(), ['first-build', 'first-launch', 'hour']);
-    assert.equal(await page.locator('.trophy.is-unlocked').count(), 3); assert.equal(await page.locator('.trophy').count(), 33);
-    assert.equal(await page.locator('#trophy-count').textContent(), '3 из 33');
+    assert.equal(await page.locator('.trophy.is-unlocked').count(), 3); assert.equal(await page.locator('.trophy').count(), 35);
+    assert.equal(await page.locator('#trophy-count').textContent(), '3 из 35');
     assert.equal(await page.locator('#stats-playtime').textContent(), '2 ч 30 мин'); assert.equal(await page.locator('.stat-bar').count(), 1);
     await assert.rejects(page.evaluate(() => window.launcher.unlockAchievements('host')));
     assert.equal((await page.evaluate(() => window.launcher.unlockAchievements(['../x', 'hour']))).hour.length > 10, true);
@@ -227,7 +227,7 @@ async function main() {
     await page.locator('#intro').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('.rail-button[data-view="trophies"]').isVisible(), false);
     await page.keyboard.press('5'); await page.locator('#ui-trophies').locator('..').click();
-    await page.keyboard.press('4'); assert.equal(await page.locator('#trophy-count').textContent(), '5 из 33');
+    await page.keyboard.press('4'); assert.equal(await page.locator('#trophy-count').textContent(), '5 из 35');
     await page.keyboard.press('3'); await page.waitForFunction(value => document.getElementById('server-port').value === value, String(port));
     assert.equal(await page.locator('#server-eula').isChecked(), true, 'An accepted EULA is remembered by the server folder');
     process.stdout.write('OK: opening animation, logo, palette and both fonts, still icons, complete icon set, hotbar keys, section transitions, splash menu, switchable achievements, screenshot copy and favourites, item tooltip, worlds list, level bar, achievements with persistence, screenshot gallery and cover, server builder import/validation/persistence, configured port on a real TCP server, live players, commands with history and quick actions. Server Java replaced by a test Node child.\n');

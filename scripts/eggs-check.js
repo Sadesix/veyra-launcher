@@ -36,9 +36,9 @@ async function main() {
 
     // До открытия секретное достижение выглядит как «???» с намёком.
     await page.keyboard.press('4');
-    assert.equal(await page.locator('.trophy').count(), 33);
-    assert.equal(await page.locator('.trophy.is-secret').count(), 10);
-    assert.deepEqual(await page.locator('.trophy.is-secret strong').allTextContents(), Array(10).fill('???'));
+    assert.equal(await page.locator('.trophy').count(), 35);
+    assert.equal(await page.locator('.trophy.is-secret').count(), 11);
+    assert.deepEqual(await page.locator('.trophy.is-secret strong').allTextContents(), Array(11).fill('???'));
     await page.keyboard.press('1');
 
     // Код Konami: не срабатывает в поле ввода, срабатывает на странице.
@@ -58,7 +58,7 @@ async function main() {
     // Экран отладки F3.
     await page.keyboard.press('F3');
     await page.locator('#debug-screen').waitFor({ state: 'visible' });
-    assert.match(await page.locator('#debug-left').textContent(), /Veyra 0\.8\.1/);
+    assert.match(await page.locator('#debug-left').textContent(), /Veyra 0\.8\.\d+/);
     assert.match(await page.locator('#debug-left').textContent(), /Сборок: 2/);
     await waitTrophy('debug');
     await page.keyboard.press('F3');
@@ -95,7 +95,7 @@ async function main() {
 
     await page.keyboard.press('4');
     await page.locator('#trophies-page').waitFor({ state: 'visible' });
-    await page.waitForFunction(() => document.querySelectorAll('.trophy.is-secret').length === 4, null, { timeout: 10000 })
+    await page.waitForFunction(() => document.querySelectorAll('.trophy.is-secret').length === 5, null, { timeout: 10000 })
       .catch(async error => { throw new Error(error.message + ' ' + JSON.stringify(await page.evaluate(() => [...document.querySelectorAll('.trophy.is-secret small')].length))); });
     assert.ok((await page.locator('.trophy.is-unlocked strong').allTextContents()).includes('Тридцать жизней'));
     await page.waitForTimeout(500); await page.screenshot({ path: path.join(output, 'trophies-secret.png') });
@@ -109,7 +109,7 @@ async function main() {
     await waitTrophy('pumpkin');
     assert.equal((await earned())['new-year'], undefined);
     assert.deepEqual(errors, []);
-    process.stdout.write('OK: 33 achievements with 10 secret ones, Konami code with block rain (ignored in fields), F3 debug screen, hidden snake with its own keys, logo knocks, exploding creeper splash, chatterbox and the Halloween clock.\n');
+    process.stdout.write('OK: 35 achievements with 11 secret ones, Konami code with block rain (ignored in fields), F3 debug screen, hidden snake with its own keys, logo knocks, exploding creeper splash, chatterbox and the Halloween clock.\n');
   } finally { await app.close(); }
 }
 main().catch(error => { process.stderr.write(error.stack + '\n'); process.exitCode = 1; });

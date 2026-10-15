@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 const invoke = (method, ...args) => ipcRenderer.invoke(`launcher:${method}`, ...args);
 
 contextBridge.exposeInMainWorld('launcher', Object.freeze({
+  // Праздничная тема: «season» — по календарю, «off» — выключена. Проверки по умолчанию идут без неё, чтобы сверять обычные цвета.
+  festive: process.env.VEYRA_HALLOWEEN === 'season' || !process.env.VEYRA_TEST_DATA_DIR && process.env.VEYRA_HALLOWEEN !== 'off' ? 'season' : 'off',
   getState: () => invoke('get-state'),
   refreshVersions: () => invoke('refresh-versions'),
   getLoaderVersions: (loader, version) => invoke('get-loader-versions', loader, version),

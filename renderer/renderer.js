@@ -516,12 +516,15 @@
     setText('recipe-result-label', el('create-name').value.trim() || suggestedName());
     el('recipe-result').classList.toggle('is-ready', !el('create-submit').disabled);
   }
+  const greetingNote = el('greeting-note').textContent;
   function renderGreeting() {
     if (!state.data) return;
-    const hour = new Date().getHours();
-    setText('greeting-time', hour < 6 ? 'Доброй ночи' : hour < 12 ? 'Доброе утро' : hour < 18 ? 'Добрый день' : 'Добрый вечер');
+    const hour = new Date().getHours(), spooky = window.veyraHalloween?.active();
+    setText('greeting-time', spooky ? window.veyraHalloween.greeting() : hour < 6 ? 'Доброй ночи' : hour < 12 ? 'Доброе утро' : hour < 18 ? 'Добрый день' : 'Добрый вечер');
     setText('greeting-name', state.data.account.name);
+    setText('greeting-note', spooky ? window.veyraHalloween.note : greetingNote);
   }
+  window.addEventListener('veyra:halloween', renderGreeting);
   function duration(ms, live = false) {
     const seconds = Math.floor(Math.max(0, ms) / 1000);
     const hours = Math.floor(seconds / 3600);
