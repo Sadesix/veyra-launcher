@@ -1,10 +1,9 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, safeStorage, screen, shell } = require('electron');
+const { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, nativeImage, protocol, safeStorage, screen, shell } = require('electron');
 const { createHash, randomUUID } = require('node:crypto');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { launch, Version } = require('@xmcl/core');
-const { getVersionList } = require('@xmcl/installer');
 const { installBase, installModdedLibraries } = require('./game-install');
 const { fetchLoaderVersions, installLoader, validVersion } = require('./loaders');
 const { requiredJava, resolveJava, scanJava, javaInfo } = require('./java-runtime');
@@ -20,8 +19,12 @@ const { backgrounds, validBackground, randomBackground } = require('./background
 const { DiscordPresence } = require('./discord-presence');
 const { CartStore } = require('./cart-store');
 const { buildName } = require('./build-name');
-const { clientFolder, clientName, trackClient, releaseClient } = require('./client-sessions');
+const { clientFolder, clientName, clientMarker, findClients, alive } = require('./client-sessions');
 const { ServerManager, portFree } = require('./server-manager');
+const { serverConfig, importProperties } = require('./server-config');
+const { Updater, MODES: UPDATE_MODES, newer, fileHash } = require('./updater');
+const updateConfig = require('./update-config.json');
+const { detectInstall, readInstallState, runSetup, cleanupInstall } = require('./install-mode');
 const microsoftConfig = require('./microsoft-config.json');
 
 if (process.env.VEYRA_TEST_DATA_DIR) app.setPath('userData', path.resolve(process.env.VEYRA_TEST_DATA_DIR));
@@ -36,6 +39,11 @@ let manifest = { latest: {}, versions: [] };
 let activeOperation = null;
 let gameProcess = null;
 const games = new Map();
+// Поиск клиентов, оставшихся от прошлого запуска лаунчера: запуск новой игры ждёт его, чтобы не занять их папки и ники.
+let clientsReady = Promise.resolve();
+let clientsSaveQueue = Promise.resolve();
+let clientsWatch = null;
+let verifyingClients = false;
 let refreshPromise = null;
 let javaCandidates = [];
 let saveQueue = Promise.resolve();
@@ -56,12 +64,33 @@ let savedWindow = {};
 let windowSaveQueue = Promise.resolve();
 let windowSaveTimer;
 const discord = new DiscordPresence({ onStatus: () => { if (settings) broadcast({ type: 'discord', status: discord.status }); } });
-const server = new ServerManager({ onChange: () => { if (settings) emitState(); } });
+const server = new ServerManager({ version: app.getVersion(), onChange: () => { if (settings) emitState(); } });
+const WINDOW_COLOR = '#201b22';
+// Установленный лаунчер (app-<сборка> внутри папки установки) ставит обновления установщиком новой версии.
+// Прежние переносимые сборки сообщали путь к EXE: рядом с ним лежат и скачанные обновления.
+const install = detectInstall();
+const portableFile = install ? '' : process.env.PORTABLE_EXECUTABLE_FILE || '';
+// Окна лаунчера группируются на панели задач с ярлыком из меню «Пуск».
+if (process.platform === 'win32') app.setAppUserModelId('dev.veyra.launcher');
+const updater = new Updater({
+  version: app.getVersion(),
+  // Проверочные запуски не стучатся на настоящий сайт: им адрес задаёт VEYRA_UPDATE_FEED.
+  feed: process.env.VEYRA_UPDATE_FEED || (process.env.VEYRA_TEST_DATA_DIR ? '' : updateConfig.feed),
+  directory: () => install ? install.packages : portableFile ? path.dirname(portableFile) : process.env.VEYRA_TEST_DATA_DIR ? path.join(dataDir(), 'updates') : app.getPath('downloads'),
+  fileName: version => install ? 'Veyra-Launcher-Setup-' + version + '.exe' : 'Veyra-Launcher-' + version + '-x64.exe',
+  insecure: Boolean(process.env.VEYRA_TEST_DATA_DIR),
+  onChange: () => { if (settings) emitState(); },
+});
+let updateTimer;
+let handoffFile = '';
+let preparing = null;
 
 const dataDir = () => app.getPath('userData');
 const settingsFile = () => path.join(dataDir(), 'settings.json');
 const manifestFile = () => path.join(dataDir(), 'version-manifest.json');
 const logFile = () => path.join(dataDir(), 'launcher.log');
+const clientsFile = () => path.join(dataDir(), 'running-clients.json');
+const dataTag = () => createHash('sha256').update(path.resolve(dataDir()).toLowerCase()).digest('hex').slice(0, 12);
 const instancesDir = () => process.env.VEYRA_TEST_DATA_DIR
   ? path.join(dataDir(), 'instances')
   : path.join(app.getPath('documents'), 'Veyra Launcher', 'instances');
@@ -122,6 +151,9 @@ function defaultSettings() {
     discordEnabled: !process.env.VEYRA_TEST_DATA_DIR,
     selectedInstanceId: '',
     instances: [],
+    updates: 'notify',
+    pendingUpdate: null,
+    achievements: {},
     appearance: appearance(),
   };
 }
@@ -177,6 +209,8 @@ function sanitizeInstance(raw) {
     coverFile: typeof raw.coverFile === 'string' && /^cover\.(png|jpg|webp)$/.test(raw.coverFile) ? raw.coverFile : '',
     coverRevision: Number.isSafeInteger(raw.coverRevision) ? raw.coverRevision : 0,
     backgroundId: validBackground(raw.backgroundId) ? raw.backgroundId : 'default',
+    serverConfig: raw.serverConfig && typeof raw.serverConfig === 'object' ? serverConfig(raw.serverConfig, { maxMemoryGb: maxMemoryGb() }) : null,
+    favoriteShots: Array.isArray(raw.favoriteShots) ? raw.favoriteShots.filter(validShotName).slice(-200) : [],
     legacy: Boolean(raw.legacy),
     installed: false,
   };
@@ -218,6 +252,14 @@ async function loadState() {
   settings.showSnapshots = Boolean(saved.showSnapshots);
   if (typeof saved.discordEnabled === 'boolean') settings.discordEnabled = saved.discordEnabled;
   settings.appearance = appearance(saved.appearance);
+  if (UPDATE_MODES.includes(saved.updates)) settings.updates = saved.updates;
+  const pending = saved.pendingUpdate;
+  if (pending && typeof pending === 'object' && /^\d{1,4}(?:\.\d{1,4}){1,3}$/.test(pending.version) && typeof pending.file === 'string' && path.isAbsolute(pending.file) && /^[0-9a-f]{64}$/.test(pending.sha256)) {
+    settings.pendingUpdate = { version: pending.version, file: path.resolve(pending.file), sha256: pending.sha256 };
+  }
+  if (saved.achievements && typeof saved.achievements === 'object') {
+    for (const [id, time] of Object.entries(saved.achievements).slice(0, 64)) if (validAchievement(id) && typeof time === 'string') settings.achievements[id] = time.slice(0, 40);
+  }
   if (Array.isArray(saved.instances)) {
     settings.instances = saved.instances.map(sanitizeInstance).filter(Boolean);
     settings.selectedInstanceId = typeof saved.selectedInstanceId === 'string' ? saved.selectedInstanceId : '';
@@ -243,6 +285,14 @@ async function loadState() {
   const cached = await readJson(manifestFile(), null);
   if (Array.isArray(cached?.versions)) manifest = cached;
   await persist();
+}
+
+function validShotName(name) {
+  return typeof name === 'string' && name.length <= 140 && path.basename(name) === name && /^[^\\/:*?"<>|\x00-\x1f]+\.png$/i.test(name);
+}
+
+function validAchievement(id) {
+  return typeof id === 'string' && /^[a-z0-9-]{1,40}$/.test(id);
 }
 
 function selectedInstance() {
@@ -273,13 +323,16 @@ function publicState() {
       selectedInstanceId: settings.selectedInstanceId,
       appearance: { ...settings.appearance },
       discordEnabled: settings.discordEnabled,
+      updates: settings.updates,
     },
+    update: { ...updater.state, portable: Boolean(portableFile), installed: Boolean(install) },
     instances: settings.instances.map((instance) => ({
       ...instance,
       coverUrl: instance.coverFile ? 'veyra://cover/' + encodeURIComponent(instance.id) + '?v=' + instance.coverRevision : backgrounds.find(item => item.id === instance.backgroundId)?.url || '',
     })),
     versions,
     backgrounds,
+    achievements: { ...settings.achievements },
     discordStatus: discord.status,
     javaCandidates,
     operation: activeOperation ? {
@@ -289,7 +342,7 @@ function publicState() {
       cancellable: activeOperation.type === 'install' || Boolean(activeOperation.cancellable),
     } : null,
     runningInstanceId: gameProcess?.instanceId || null,
-    runningClients: [...games.values()].map(run => ({ id: run.id, instanceId: run.instanceId, pid: run.child.pid, name: run.name, directory: run.directory, memoryGb: run.memoryGb, startedAt: run.startedAt, stopping: run.stopping })),
+    runningClients: [...games.values()].map(run => ({ id: run.id, instanceId: run.instanceId, pid: run.pid, name: run.name, directory: run.directory, memoryGb: run.memoryGb, startedAt: run.startedAt, stopping: run.stopping })),
     server: server.state,
     stoppingGame: Boolean(gameProcess?.stopping),
     runningSession: gameProcess ? { instanceId: gameProcess.instanceId, accountedAt: gameProcess.accountedAt, startedAt: gameProcess.startedAt } : null,
@@ -531,6 +584,7 @@ async function refreshVersions() {
   if (refreshPromise) return refreshPromise;
   refreshPromise = (async () => {
     try {
+      const { getVersionList } = require('@xmcl/installer');
       const list = await getVersionList({
         fetch: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(25000) }),
       });
@@ -647,7 +701,10 @@ async function setInstanceCover(id) {
     filters: [{ name: 'Изображения', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
   });
   if (result.canceled || !result.filePaths[0]) return null;
-  const source = result.filePaths[0];
+  return applyCover(instance, result.filePaths[0]);
+}
+
+async function applyCover(instance, source) {
   const stat = await fs.stat(source);
   if (!stat.isFile() || stat.size > 15 * 1024 * 1024) throw new Error('Обложка должна быть файлом до 15 МБ');
   const bytes = await fs.readFile(source);
@@ -671,6 +728,42 @@ async function setInstanceCover(id) {
   emitState();
   status('Обложка сборки обновлена', 'success');
   return { ...instance };
+}
+
+// Скриншоты читаются только из папки screenshots самой сборки, без ссылок и вложенных путей.
+async function screenshotFile(id, name) {
+  const instance = requireInstance(id);
+  if (!validShotName(name)) throw new Error('Некорректное имя скриншота');
+  const file = path.join(instance.directory, 'screenshots', name);
+  const stat = await fs.lstat(file).catch(() => null);
+  if (!stat?.isFile()) throw new Error('Скриншот не найден');
+  return { instance, file, stat };
+}
+
+async function listScreenshots(id) {
+  const instance = requireInstance(id);
+  const root = path.join(instance.directory, 'screenshots');
+  if ((await fs.lstat(root).catch(() => null))?.isSymbolicLink()) return [];
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  const files = await Promise.all(entries.filter(entry => entry.isFile() && /\.png$/i.test(entry.name) && entry.name.length <= 140).map(async entry => {
+    const stat = await fs.stat(path.join(root, entry.name)).catch(() => null);
+    return stat ? { name: entry.name, time: stat.mtimeMs, size: stat.size } : null;
+  }));
+  // Избранные кадры показываются всегда и первыми, за ними — последние 36.
+  const favorites = new Set(instance.favoriteShots), sorted = files.filter(Boolean).sort((a, b) => b.time - a.time);
+  return [...sorted.filter(item => favorites.has(item.name)).slice(0, 60), ...sorted.filter(item => !favorites.has(item.name)).slice(0, 36)].map(item => ({
+    ...item, favorite: favorites.has(item.name), url: 'veyra://shot/' + encodeURIComponent(id) + '/' + encodeURIComponent(item.name) + '?v=' + Math.round(item.time),
+  }));
+}
+
+async function favoriteScreenshot(id, name, favorite) {
+  const { instance } = await screenshotFile(id, name);
+  const names = new Set(instance.favoriteShots);
+  if (favorite === true) names.add(name); else names.delete(name);
+  instance.favoriteShots = [...names].slice(-200);
+  await persist();
+  emitState();
+  return listScreenshots(id);
 }
 
 async function resetInstanceCover(id) {
@@ -737,12 +830,120 @@ async function saveSettings(patch) {
   }
   if (patch.showSnapshots !== undefined) next.showSnapshots = Boolean(patch.showSnapshots);
   if (patch.discordEnabled !== undefined) next.discordEnabled = patch.discordEnabled === true;
+  if (patch.updates !== undefined) {
+    if (!UPDATE_MODES.includes(patch.updates)) throw new Error('Неизвестный режим обновлений');
+    next.updates = patch.updates;
+  }
   if (patch.appearance !== undefined) next.appearance = appearance(patch.appearance, true);
+  const updatesChanged = next.updates !== settings.updates;
   settings = next;
   await persist();
   applyWindowAppearance(settings.appearance);
   emitState();
+  if (updatesChanged) scheduleUpdates(0);
   return publicState();
+}
+
+// Режим «Автоматически» сам скачивает найденную версию; остальные ждут кнопки.
+async function checkUpdates() {
+  const state = await updater.check();
+  if (settings.updates === 'auto' && state.status === 'available' && state.downloadable) downloadUpdate().catch(error => log('Обновление: ' + errorMessage(error)));
+  return updater.state;
+}
+
+async function downloadUpdate() {
+  const downloaded = await updater.download();
+  if (!downloaded) return updater.state;
+  settings.pendingUpdate = downloaded;
+  await persist();
+  if (install) await prepareUpdate(downloaded).catch(() => {});
+  return updater.state;
+}
+
+// Установщик новой версии распаковывает её рядом с работающей и переключает запуск на неё.
+// Пока лаунчер не перезапущен, работает прежняя версия; при сбое переключения не происходит.
+function prepareUpdate(pending) {
+  if (preparing) return preparing;
+  updater.set({ status: 'preparing', progress: null, error: '' });
+  preparing = (async () => {
+    try {
+      await runSetup(pending.file, ['--update', '--root', install.root]);
+      const state = readInstallState(install.root);
+      if (!state || state.version !== pending.version) throw new Error('установщик не переключил версию');
+      log('Обновление ' + pending.version + ' установлено и откроется после перезапуска');
+      updater.set({ status: 'ready', progress: 100, prepared: true, error: '' });
+    } catch (error) {
+      log('Установка обновления: ' + errorMessage(error));
+      updater.set({ status: 'ready', progress: 100, prepared: false, error: 'Не удалось установить обновление: ' + errorMessage(error) });
+      throw error;
+    } finally { preparing = null; }
+  })();
+  return preparing;
+}
+
+function scheduleUpdates(delay = 5000) {
+  clearTimeout(updateTimer);
+  if (settings.updates === 'off' || !updater.feed) return;
+  updateTimer = setTimeout(() => {
+    checkUpdates().catch(error => log('Обновление: ' + errorMessage(error))).finally(() => scheduleUpdates(6 * 60 * 60 * 1000));
+  }, delay);
+}
+
+// Сообщает, действительно ли новая версия запустилась: при неудаче старая продолжает работать.
+function launchUpdate(file) {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith('PORTABLE_EXECUTABLE_')) delete env[key];
+  return new Promise((resolve) => {
+    const child = require('node:child_process').spawn(file, [], { detached: true, stdio: 'ignore', env });
+    child.once('spawn', () => { child.unref(); resolve(true); });
+    child.once('error', (error) => { log('Запуск обновления: ' + errorMessage(error)); resolve(false); });
+  });
+}
+
+async function applyUpdate() {
+  const state = updater.state;
+  if (state.status !== 'ready' || !state.file) throw new Error('Обновление ещё не скачано');
+  if (install) {
+    if (!state.prepared) await prepareUpdate(settings.pendingUpdate);
+    if (games.size || server.run || activeOperation) throw new Error('Остановите игру, сервер и текущую установку перед перезапуском');
+    handoffFile = install.stub;
+    setImmediate(() => app.quit());
+    return { restarting: true };
+  }
+  if (!portableFile) { shell.showItemInFolder(state.file); return { restarting: false }; }
+  if (games.size || server.run || activeOperation) throw new Error('Остановите игру, сервер и текущую установку перед обновлением');
+  handoffFile = state.file;
+  setImmediate(() => app.quit());
+  return { restarting: true };
+}
+
+// Скачанная и проверенная версия: в автоматическом режиме запускается вместо старой, иначе ждёт кнопки.
+async function resumeUpdate() {
+  const pending = settings.pendingUpdate;
+  if (!pending) return false;
+  // Новая версия уже работает: скачанный установщик больше не нужен.
+  if (!newer(pending.version, app.getVersion())) {
+    settings.pendingUpdate = null;
+    await persist();
+    if (install) await fs.rm(pending.file, { force: true }).catch(() => {});
+    return false;
+  }
+  const usable = /^Veyra-Launcher-(?:Setup-[\d.]+|[\d.]+-x64)\.exe$/.test(path.basename(pending.file)) &&
+    await fileHash(pending.file).then(hash => hash === pending.sha256).catch(() => false);
+  if (!usable) { settings.pendingUpdate = null; await persist(); return false; }
+  updater.adopt(pending.version, pending.file);
+  if (install) {
+    // Установщик уже переключил версию — нужен только перезапуск; иначе установка повторяется в фоне.
+    if (readInstallState(install.root)?.version === pending.version) updater.set({ prepared: true });
+    else setTimeout(() => prepareUpdate(pending).catch(() => {}), 4000);
+    return false;
+  }
+  if (settings.updates !== 'auto' || !portableFile || path.dirname(pending.file).toLowerCase() !== path.dirname(portableFile).toLowerCase()) return false;
+  app.releaseSingleInstanceLock();
+  if (!await launchUpdate(pending.file)) { app.requestSingleInstanceLock(); return false; }
+  // Запись в журнал дожидается диска: сразу после неё старая версия выходит.
+  await fs.appendFile(logFile(), '[' + new Date().toISOString() + '] Запускаем скачанную версию ' + pending.version + '\n', 'utf8').catch(() => {});
+  return true;
 }
 
 async function fetchRequirements(metadata, signal) {
@@ -836,9 +1037,9 @@ async function launchInstance(id, connect = false) {
   if (!instance.installed) throw new Error('Сначала установите сборку');
   if (authController) throw new Error('Завершите Microsoft-вход или отмените его перед запуском');
   const operation = beginOperation('launch', id);
-  let directory = '';
   try {
     if (connect && (!server.run || server.state.status !== 'ready' || server.state.instanceId !== id)) throw new Error('Сначала запустите сервер этой сборки и дождитесь готовности');
+    await clientsReady;
     const memoryGb = instance.memoryGb || settings.memoryGb;
     ensureMemory(memoryGb);
     await content.recover(instance);
@@ -854,9 +1055,12 @@ async function launchInstance(id, connect = false) {
       ? await microsoftIdentity(operation.signal)
       : (() => { const name = clientName(settings.playerName, [...games.values()].map(run => run.name), settings.allowAnySymbols); return { gameProfile: { name, id: offlineUuid(name) }, accessToken: '0', userType: 'legacy' }; })();
     if (identity.accessToken !== '0' && [...games.values()].some(run => run.profileId === identity.gameProfile.id)) throw new Error('Этот Microsoft-профиль уже используется клиентом. Для второго нужен другой профиль');
-    const runId = randomUUID();
-    directory = await clientFolder(instance, [...games.values()].some(run => run.instanceId === id));
-    const extraJVMArgs = javaArguments();
+    const runId = randomUUID(), startedAt = Date.now();
+    const directory = await clientFolder(instance, [...games.values()].some(run => run.directory === instance.directory));
+    const extraJVMArgs = javaArguments([clientMarker({
+      data: dataTag(), run: runId, instance: id, folder: directory === instance.directory ? '' : path.basename(directory),
+      name: identity.gameProfile.name, profile: identity.gameProfile.id, memory: memoryGb, started: startedAt,
+    })]);
     if (instance.loader === 'neoforge' && instance.loaderVersion === '26.3.0.56-beta') {
       const source = path.join(__dirname, '..', 'assets', 'compat', 'neoforge-version-guard.jar');
       const agent = path.join(dataDir(), 'compat', 'neoforge-version-guard.jar');
@@ -869,7 +1073,7 @@ async function launchInstance(id, connect = false) {
     const child = await launch({
       gamePath: directory,
       resourcePath: instance.directory,
-      ...(connect ? (/^1\.(?:[0-9]|1[0-9])(?:\.|$)/.test(instance.minecraftVersion) ? { server: { ip: '127.0.0.1', port: 25565 } } : { quickPlayMultiplayer: '127.0.0.1:25565' }) : {}),
+      ...(connect ? (/^1\.(?:[0-9]|1[0-9])(?:\.|$)/.test(instance.minecraftVersion) ? { server: { ip: '127.0.0.1', port: server.state.port } } : { quickPlayMultiplayer: '127.0.0.1:' + server.state.port }) : {}),
       nativeRoot: path.join(directory, '.veyra-natives', runId),
       javaPath: java.path,
       version,
@@ -877,25 +1081,17 @@ async function launchInstance(id, connect = false) {
       extraJVMArgs,
       prechecks,
       signal: operation.signal,
-      spawn: (...args) => {
+      // Отдельный от лаунчера процесс: закрытие или перезапуск Veyra не обрывает игру посреди сохранения мира.
+      spawn: (command, args, options) => {
         operation.signal.throwIfAborted();
-        const child = require('node:child_process').spawn(...args);
-        try { trackClient(directory, child.pid); } catch (error) { child.kill(); throw error; }
-        child.once('close', () => releaseClient(directory).catch(error => log('Папка клиента: ' + errorMessage(error))));
-        return child;
+        return require('node:child_process').spawn(command, args, { ...options, detached: true });
       },
       maxMemory: memoryGb * 1024,
       launcherName: 'Veyra Launcher',
       extraExecOption: { windowsHide: true },
     });
-    const run = { id: runId, child, instanceId: id, directory, memoryGb, name: identity.gameProfile.name, profileId: identity.gameProfile.id, stopping: false, stoppedByUser: false, startedAt: Date.now(), accountedAt: Date.now(), settled: false };
-    games.set(runId, run);
-    gameProcess = run;
-    run.timer = setInterval(() => {
-      accountPlaytime(run);
-      persist().catch((error) => log('История игры: ' + errorMessage(error)));
-      emitState();
-    }, 15000);
+    const run = { id: runId, child, pid: child.pid, instanceId: id, directory, memoryGb, name: identity.gameProfile.name, profileId: identity.gameProfile.id, stopping: false, stoppedByUser: false, startedAt, accountedAt: Date.now(), settled: false };
+    trackRun(run);
     lastCrash = null;
     let recentOutput = '';
     const launchedAt = Date.now();
@@ -912,42 +1108,140 @@ async function launchInstance(id, connect = false) {
     child.stdout?.on('data', onOutput);
     child.stderr?.on('data', onOutput);
     child.once('error', (error) => {
-      settlePlaytime(run);
       reportError('Minecraft', error);
-      games.delete(run.id); gameProcess = [...games.values()].at(-1) || null;
-      emitState();
+      finishRun(run);
     });
     child.once('close', async (code, signal) => {
-      settlePlaytime(run);
-      games.delete(run.id); gameProcess = [...games.values()].at(-1) || null;
-      emitState();
+      finishRun(run);
       if (run.stoppedByUser) status('Игра остановлена');
       else if (code === 0) status('Minecraft закрыт');
-      else {
-        const message = diagnoseFailure(recentOutput, code, signal);
-        const reportRoot = path.join(directory, 'crash-reports');
-        const entries = await fs.readdir(reportRoot, { withFileTypes: true }).catch(() => []);
-        const reports = await Promise.all(entries.filter((entry) => entry.isFile() && entry.name.endsWith('.txt')).map(async (entry) => {
-          const file = path.join(reportRoot, entry.name);
-          const stat = await fs.stat(file).catch(() => null);
-          return stat && stat.mtimeMs >= launchedAt - 2000 ? { file, time: stat.mtimeMs } : null;
-        }));
-        const file = reports.filter(Boolean).sort((a, b) => b.time - a.time)[0]?.file || '';
-        lastCrash = { instanceId: id, message, file };
-        status(message, 'error');
-        broadcast({ type: 'game-crash', message });
-        emitState();
-      }
+      else reportCrash(run, diagnoseFailure(recentOutput, code, signal), await crashReport(directory, launchedAt));
     });
     await persist().catch((error) => log('Не удалось сохранить историю запуска: ' + errorMessage(error)));
     emitState();
     if (gameProcess?.child === child) status('Minecraft запущен: ' + instance.name, 'success');
     return { pid: child.pid || null, id: run.id, name: run.name, directory };
   } catch (error) {
-    if (directory && ![...games.values()].some(run => run.directory === directory)) await releaseClient(directory).catch(() => {});
     reportError('Не удалось запустить игру', error);
     throw error;
   } finally { endOperation(operation); }
+}
+
+function trackRun(run) {
+  games.set(run.id, run);
+  gameProcess = run;
+  run.timer = setInterval(() => {
+    accountPlaytime(run);
+    persist().catch((error) => log('История игры: ' + errorMessage(error)));
+    saveClients();
+    emitState();
+  }, 15000);
+  saveClients();
+}
+
+function finishRun(run) {
+  if (games.get(run.id) !== run) return false;
+  settlePlaytime(run);
+  games.delete(run.id); gameProcess = [...games.values()].at(-1) || null;
+  saveClients();
+  emitState();
+  return true;
+}
+
+// Отметка учёта времени каждого клиента: после перезапуска лаунчера время игры продолжает считаться с неё.
+function saveClients() {
+  const snapshot = Object.fromEntries([...games.values()].map(run => [run.id, run.accountedAt]));
+  clientsSaveQueue = clientsSaveQueue.catch(() => {}).then(() => atomicJson(clientsFile(), snapshot))
+    .catch((error) => log('Список клиентов: ' + errorMessage(error)));
+  return clientsSaveQueue;
+}
+
+async function crashReport(directory, since) {
+  const reportRoot = path.join(directory, 'crash-reports');
+  const entries = await fs.readdir(reportRoot, { withFileTypes: true }).catch(() => []);
+  const reports = await Promise.all(entries.filter((entry) => entry.isFile() && entry.name.endsWith('.txt')).map(async (entry) => {
+    const file = path.join(reportRoot, entry.name);
+    const stat = await fs.stat(file).catch(() => null);
+    return stat && stat.mtimeMs >= since - 2000 ? { file, time: stat.mtimeMs } : null;
+  }));
+  return reports.filter(Boolean).sort((a, b) => b.time - a.time)[0]?.file || '';
+}
+
+function reportCrash(run, message, file) {
+  lastCrash = { instanceId: run.instanceId, message, file };
+  status(message, 'error');
+  broadcast({ type: 'game-crash', message });
+  emitState();
+}
+
+// Клиенты, запущенные лаунчером до перезапуска, находятся по метке Veyra в командной строке Java.
+// Метка должна принадлежать сборке этого лаунчера: чужие клиенты Minecraft и игры других папок данных не учитываются.
+async function discoverClients() {
+  let found;
+  try { found = await findClients(); } catch (error) { log('Поиск запущенных клиентов: ' + errorMessage(error)); return; }
+  const clock = await fs.readFile(clientsFile(), 'utf8').then(JSON.parse).catch(() => ({}));
+  const adopted = [], tag = dataTag();
+  for (const { pid, createdAt, info } of found) {
+    if (info.data !== tag || games.has(info.run) || [...games.values()].some(run => run.pid === pid)) continue;
+    const instance = settings.instances.find(item => item.id === info.instance);
+    if (!instance || !alive(pid)) continue;
+    const now = Date.now(), saved = Number(clock?.[info.run]);
+    const run = {
+      id: info.run, child: null, pid, adopted: true, instanceId: instance.id,
+      directory: info.folder ? path.join(instance.directory, '.veyra-clients', info.folder) : instance.directory,
+      memoryGb: info.memory, name: info.name, profileId: info.profile, stopping: false, stoppedByUser: false,
+      startedAt: Math.min(info.started, now), accountedAt: saved >= createdAt - 60000 && saved <= now ? saved : now, settled: false,
+    };
+    trackRun(run);
+    adopted.push(run);
+    log('Найден запущенный клиент: ' + instance.name + ' · ' + run.name + ' (PID ' + pid + ')');
+  }
+  saveClients();
+  if (!adopted.length) return;
+  emitState();
+  status(adopted.length > 1 ? 'Minecraft уже запущен: клиентов — ' + adopted.length : 'Minecraft уже запущен: ' + settings.instances.find(item => item.id === adopted[0].instanceId).name, 'success');
+  watchClients();
+}
+
+// Найденные клиенты не связаны с лаунчером каналом вывода: их завершение замечается по процессу.
+function watchClients() {
+  if (clientsWatch) return;
+  let ticks = 0;
+  clientsWatch = setInterval(() => {
+    const adopted = [...games.values()].filter(run => run.adopted);
+    if (!adopted.length) { clearInterval(clientsWatch); clientsWatch = null; return; }
+    for (const run of adopted) if (!alive(run.pid)) endAdopted(run);
+    // Раз в полминуты PID сверяется с меткой: номер завершившейся игры мог достаться другому процессу.
+    if (++ticks % 15 === 0) verifyClients();
+  }, 2000);
+}
+
+async function verifyClients() {
+  if (verifyingClients) return;
+  verifyingClients = true;
+  try {
+    const found = await findClients();
+    for (const run of [...games.values()].filter(item => item.adopted)) {
+      if (!found.some(item => item.info.run === run.id && item.pid === run.pid)) endAdopted(run);
+    }
+  } catch (error) { log('Проверка клиентов: ' + errorMessage(error)); }
+  finally { verifyingClients = false; }
+}
+
+async function endAdopted(run) {
+  if (!finishRun(run)) return;
+  if (run.stoppedByUser) return status('Игра остановлена');
+  const file = await crashReport(run.directory, run.startedAt);
+  if (file) reportCrash(run, 'Minecraft завершился со сбоем. Откройте отчёт или журнал игры, чтобы узнать причину.', file);
+  else status('Minecraft закрыт');
+}
+
+// Перед завершением найденного клиента PID ещё раз сверяется с меткой, чтобы не закрыть чужую программу с тем же номером.
+async function stopAdopted(run) {
+  const found = await findClients();
+  if (!found.some(item => item.info.run === run.id && item.pid === run.pid)) return endAdopted(run);
+  try { process.kill(run.pid); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+  setTimeout(() => { if (!alive(run.pid)) endAdopted(run); }, 400);
 }
 
 function accountPlaytime(run) {
@@ -979,6 +1273,11 @@ async function stopGame(runId = '', instanceId = '') {
   run.stoppedByUser = true;
   emitState();
   try {
+    if (run.adopted) {
+      status('Останавливаем Minecraft…');
+      await stopAdopted(run);
+      return true;
+    }
     if (!run.child.kill() && run.child.exitCode == null) throw new Error('Не удалось завершить процесс Minecraft');
     status('Останавливаем Minecraft…');
     return true;
@@ -998,18 +1297,36 @@ async function startServer(id, acceptEula) {
   const instance = requireInstance(id), metadata = manifest.versions.find(item => item.id === instance.minecraftVersion);
   if (!metadata) throw new Error('Обновите список версий Minecraft');
   if (server.run) throw new Error('Сервер уже запущен');
-  await portFree(25565);
-  const memoryGb = Math.min(4, instance.memoryGb || settings.memoryGb);
+  const config = await effectiveServerConfig(instance);
+  await portFree(config.port);
+  const memoryGb = config.memoryGb || Math.min(4, instance.memoryGb || settings.memoryGb);
   ensureMemory(memoryGb);
   const operation = beginOperation('server', id); operation.cancellable = true;
   try {
     await content.recover(instance);
     const requirements = await fetchRequirements(metadata, operation.signal);
     const java = await resolveJava({ javaVersion: { majorVersion: requirements.major, component: requirements.component } }, instance.javaPath || settings.javaPath, dataDir(), progress, operation.signal);
-    progress({ phase: 'Сервер', message: 'Готовим локальный сервер на 25565', completed: 0, total: 0 }, true);
-    return await server.start(instance, metadata, java.path, memoryGb, acceptEula === true, operation.signal);
+    progress({ phase: 'Сервер', message: 'Готовим локальный сервер на ' + config.port, completed: 0, total: 0 }, true);
+    return await server.start(instance, metadata, java.path, memoryGb, acceptEula === true, operation.signal, config);
   } catch (error) { if (operation.signal.aborted) { status('Подготовка сервера отменена'); return server.state; } reportError('Сервер', error); throw error; }
   finally { endOperation(operation); }
+}
+
+// Пока конструктор не сохранён, исходными служат значения из уже существующего server.properties.
+async function effectiveServerConfig(instance) {
+  const options = { maxMemoryGb: maxMemoryGb() };
+  if (instance.serverConfig) return serverConfig(instance.serverConfig, options);
+  const text = await fs.readFile(path.join(instance.directory, '.veyra-server', 'server.properties'), 'utf8').catch(() => '');
+  return text ? importProperties(text, options) : serverConfig({}, options);
+}
+
+async function saveServerConfig(id, value) {
+  const instance = requireInstance(id);
+  if (server.run && server.state.instanceId === id || activeOperation?.type === 'server') throw new Error('Остановите сервер, чтобы изменить его настройки');
+  instance.serverConfig = serverConfig(value, { strict: true, maxMemoryGb: maxMemoryGb() });
+  await persist();
+  emitState();
+  return { ...instance.serverConfig };
 }
 
 async function getLogs() {
@@ -1106,7 +1423,60 @@ function registerIpc() {
   ipcMain.handle('launcher:stop-game', (_event, runId, instanceId) => stopGame(runId, instanceId));
   ipcMain.handle('launcher:start-server', (_event, id, accepted) => startServer(id, accepted));
   ipcMain.handle('launcher:stop-server', (_event, force) => server.stop(force === true));
-  ipcMain.handle('launcher:copy-server-address', () => { clipboard.writeText('127.0.0.1:25565'); return true; });
+  ipcMain.handle('launcher:copy-server-address', (_event, address) => {
+    const local = '127.0.0.1:' + (server.state?.port || 25565);
+    clipboard.writeText(typeof address === 'string' && server.state?.addresses?.includes(address) ? address : local);
+    return true;
+  });
+  ipcMain.handle('launcher:get-server-config', async (_event, id) => effectiveServerConfig(requireInstance(id)));
+  ipcMain.handle('launcher:save-server-config', (_event, id, value) => saveServerConfig(id, value));
+  ipcMain.handle('launcher:send-server-command', (_event, text) => server.command(text));
+  ipcMain.handle('launcher:unlock-achievements', async (_event, ids) => {
+    if (!Array.isArray(ids)) throw new Error('Некорректный список достижений');
+    let changed = false;
+    for (const id of ids.slice(0, 32)) {
+      if (!validAchievement(id) || settings.achievements[id] || Object.keys(settings.achievements).length >= 64) continue;
+      settings.achievements[id] = new Date().toISOString();
+      changed = true;
+    }
+    if (changed) { await persist(); emitState(); }
+    return { ...settings.achievements };
+  });
+  ipcMain.handle('launcher:check-updates', () => checkUpdates());
+  ipcMain.handle('launcher:download-update', () => downloadUpdate());
+  ipcMain.handle('launcher:cancel-update', () => updater.cancel());
+  ipcMain.handle('launcher:apply-update', () => applyUpdate());
+  ipcMain.handle('launcher:open-update-page', async () => {
+    const target = updater.state.page || updateConfig.page;
+    if (typeof target !== 'string' || !/^https:\/\//.test(target)) throw new Error('Страница загрузки не указана');
+    await shell.openExternal(target);
+    return true;
+  });
+  ipcMain.handle('launcher:get-screenshots', (_event, id) => listScreenshots(id));
+  ipcMain.handle('launcher:favorite-screenshot', (_event, id, name, favorite) => favoriteScreenshot(id, name, favorite));
+  ipcMain.handle('launcher:copy-screenshot', async (_event, id, name) => {
+    const shot = await screenshotFile(id, name);
+    if (shot.stat.size > 40 * 1024 * 1024) throw new Error('Скриншот слишком большой для буфера обмена');
+    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([await fs.readFile(shot.file)], { type: 'image/png' }) })]);
+    return true;
+  });
+  ipcMain.handle('launcher:open-screenshot', async (_event, id, name) => {
+    const error = await shell.openPath((await screenshotFile(id, name)).file);
+    if (error) throw new Error(error);
+    return true;
+  });
+  ipcMain.handle('launcher:cover-from-screenshot', async (_event, id, name) => {
+    const shot = await screenshotFile(id, name);
+    if (shot.instance.legacy) throw new Error('Обложку старой сборки можно добавить после переноса в новую папку');
+    return applyCover(shot.instance, shot.file);
+  });
+  ipcMain.handle('launcher:open-screenshots-folder', async (_event, id) => {
+    const directory = path.join(requireInstance(id).directory, 'screenshots');
+    await fs.mkdir(directory, { recursive: true });
+    const error = await shell.openPath(directory);
+    if (error) throw new Error(error);
+    return true;
+  });
   ipcMain.handle('launcher:open-server-folder', async (_event, id) => { const directory = path.join(requireInstance(id).directory, '.veyra-server'); await fs.mkdir(directory, { recursive: true }); return shell.openPath(directory); });
   ipcMain.handle('launcher:server-eula', async (_event, id) => /(?:^|\n)eula\s*=\s*true/.test(await fs.readFile(path.join(requireInstance(id).directory, '.veyra-server', 'eula.txt'), 'utf8').catch(() => '')));
   ipcMain.handle('launcher:open-server-eula', () => shell.openExternal('https://www.minecraft.net/eula'));
@@ -1207,7 +1577,7 @@ function createWindow() {
     frame: false,
     title: 'Veyra Launcher',
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
-    backgroundColor: acrylic && settings.appearance.transparency > 0 ? '#00000000' : '#080911',
+    backgroundColor: acrylic && settings.appearance.transparency > 0 ? '#00000000' : WINDOW_COLOR,
     ...(acrylic ? { backgroundMaterial: settings.appearance.transparency > 0 ? 'acrylic' : 'none' } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -1238,7 +1608,7 @@ function applyWindowAppearance(value) {
   if (!window || window.isDestroyed()) return;
   const supported = process.platform === 'win32' && Number(os.release().split('.')[2]) >= 22621;
   const glass = supported && value.transparency > 0;
-  window.setBackgroundColor(glass ? '#00000000' : '#080911');
+  window.setBackgroundColor(glass ? '#00000000' : WINDOW_COLOR);
   if (supported) window.setBackgroundMaterial(glass ? 'acrylic' : 'none');
 }
 
@@ -1246,6 +1616,15 @@ if (primaryLauncher) app.whenReady().then(async () => {
   protocol.handle('veyra', async (request) => {
     try {
       const url = new URL(request.url);
+      if (url.hostname === 'shot' && url.pathname.split('/').length === 3) {
+        const [id, name] = url.pathname.slice(1).split('/').map(decodeURIComponent);
+        const shot = await screenshotFile(id, name);
+        // Миниатюра Windows экономит память галереи; полный файл служит запасным вариантом.
+        const preview = await nativeImage.createThumbnailFromPath(shot.file, { width: 480, height: 270 }).catch(() => null);
+        if (preview && !preview.isEmpty()) return new Response(preview.toJPEG(86), { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' } });
+        if (shot.stat.size > 40 * 1024 * 1024) return new Response('', { status: 404 });
+        return new Response(await fs.readFile(shot.file), { headers: { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' } });
+      }
       if (url.hostname !== 'cover' || url.pathname.split('/').length !== 2) return new Response('', { status: 404 });
       const id = decodeURIComponent(url.pathname.slice(1));
       const instance = settings?.instances.find((item) => item.id === id);
@@ -1258,6 +1637,7 @@ if (primaryLauncher) app.whenReady().then(async () => {
   });
   await fs.mkdir(dataDir(), { recursive: true });
   await loadState();
+  if (await resumeUpdate().catch(error => { log('Обновление: ' + errorMessage(error)); return false; })) { app.exit(0); return; }
   const recovered = await Promise.allSettled(settings.instances.map(instance => content.recover(instance)));
   for (const result of recovered) if (result.status === 'rejected') log('Восстановление содержимого: ' + errorMessage(result.reason));
   accountVault = new AccountVault(path.join(dataDir(), 'microsoft-session.bin'), safeStorage);
@@ -1267,10 +1647,30 @@ if (primaryLauncher) app.whenReady().then(async () => {
   updateDiscord();
   registerIpc();
   createWindow();
-  refreshVersions().catch(() => {});
-  scanJava(dataDir(), [settings.javaPath, ...settings.instances.map((item) => item.javaPath)])
-    .then((found) => { javaCandidates = found; emitState(); })
-    .catch((error) => log('Поиск Java: ' + errorMessage(error)));
+  clientsReady = discoverClients().catch((error) => log('Поиск запущенных клиентов: ' + errorMessage(error)));
+  scheduleUpdates();
+  // Список версий и поиск Java начинаются, когда окно уже на экране, и не отнимают время у первой отрисовки.
+  let background = false;
+  const startBackground = () => {
+    if (background) return;
+    background = true;
+    refreshVersions().catch(() => {});
+    scanJava(dataDir(), [settings.javaPath, ...settings.instances.map((item) => item.javaPath)])
+      .then((found) => { javaCandidates = found; emitState(); })
+      .catch((error) => log('Поиск Java: ' + errorMessage(error)));
+  };
+  window.once('show', () => setTimeout(startBackground, 600));
+  setTimeout(startBackground, 5000);
+  // Прежние версии убираются, когда новая уже открылась.
+  // Служебные процессы прежней версии закрываются не сразу, поэтому занятую папку уборка пробует ещё несколько раз.
+  if (install) {
+    const pause = Number(process.env.VEYRA_CLEANUP_DELAY) || 20000;
+    const tidy = attempt => cleanupInstall(install, app.getVersion()).then(({ removed, busy }) => {
+      if (removed.length) log('Убраны прежние версии: ' + removed.join(', '));
+      if (busy && attempt < 5) setTimeout(() => tidy(attempt + 1), pause * attempt);
+    }).catch(error => log('Уборка версий: ' + errorMessage(error)));
+    setTimeout(() => tidy(1), pause);
+  }
 }).catch((error) => {
   dialog.showErrorBox('Veyra Launcher', errorMessage(error));
   app.quit();
@@ -1282,10 +1682,19 @@ app.on('before-quit', (event) => {
   if (!primaryLauncher) return;
   discord.dispose();
   authController?.abort();
+  updater.cancel();
+  clearTimeout(updateTimer);
   if (activeOperation?.type === 'server') activeOperation.controller.abort();
   if (finishingQuit) return;
   event.preventDefault();
   finishingQuit = true;
+  // Клиенты продолжают работать после выхода: время до этой минуты записано, следующий запуск лаунчера найдёт их и продолжит учёт.
+  clearInterval(clientsWatch);
   for (const run of games.values()) settlePlaytime(run);
-  Promise.allSettled([saveWindowState(), settings ? persist() : Promise.resolve(), carts.queue, server.stop()]).finally(() => app.quit());
+  Promise.allSettled([saveWindowState(), settings ? persist() : Promise.resolve(), settings ? saveClients() : Promise.resolve(), carts.queue, server.stop()]).finally(() => {
+    // Новая версия стартует после сохранения настроек старой.
+    if (!handoffFile) return app.quit();
+    app.releaseSingleInstanceLock();
+    launchUpdate(handoffFile).finally(() => app.quit());
+  });
 });

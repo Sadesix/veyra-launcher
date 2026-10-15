@@ -5,6 +5,7 @@ const os = require('node:os');
 const { createHash } = require('node:crypto');
 const { open, readAllEntries, openEntryReadStream } = require('@xmcl/unzip');
 const { validVersion } = require('./loaders');
+const { serverConfig, serverProperties } = require('./server-config');
 async function portFree(port) {
   // Windows can allow wildcard and specific-address binds simultaneously.
   // Probe loopback and every actual IPv4 address as well as the wildcard.
@@ -18,10 +19,26 @@ async function fabricSide(file) {
   finally { zip.close(); }
 }
 class ServerManager {
-  constructor({ fetch: fetcher = (...args) => fetch(...args), spawn = (...args) => require('node:child_process').spawn(...args), onChange = () => {}, port = 25565 } = {}) { this.fetch = fetcher; this.spawn = spawn; this.onChange = onChange; this.port = port; this.run = null; this.state = null; }
+  constructor({ fetch: fetcher = (...args) => fetch(...args), spawn = (...args) => require('node:child_process').spawn(...args), onChange = () => {}, port = 25565, version = '0.8.1' } = {}) { this.fetch = fetcher; this.spawn = spawn; this.onChange = onChange; this.port = port; this.agent = 'VeyraLauncher/' + version; this.run = null; this.state = null; this.partial = ''; }
   update(patch = {}) { this.state = { ...this.state, ...patch }; this.onChange(); }
-  output(bytes) { const text = String(bytes).replace(/\x1b\[[0-9;]*m/g, ''); this.state.lines = (this.state.lines + text).slice(-60000); if (this.state.status === 'starting' && /Done \([\d.,]+s\)!|For help, type "help"/.test(this.state.lines)) this.state.status = 'ready'; this.onChange(); }
-  async json(url, signal) { const response = await this.fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(25000)]), headers: { 'User-Agent': 'VeyraLauncher/0.7.0' } }); if (!response.ok) throw new Error('Сервер загрузки: HTTP ' + response.status); return response.json(); }
+  output(bytes) { const text = String(bytes).replace(/\x1b\[[0-9;]*m/g, ''); this.state.lines = (this.state.lines + text).slice(-60000);
+    if (this.state.status === 'starting' && /Done \([\d.,]+s\)!|For help, type "help"/.test(this.state.lines)) { this.state.status = 'ready'; this.state.readyAt = Date.now(); }
+    // Игроки собираются по целым строкам журнала; чат, /say и /me начинаются с <, [ или *.
+    const lines = (this.partial + text).split(/\r?\n/); this.partial = lines.pop().slice(-2000);
+    for (const line of lines) {
+      const match = line.match(/\]: ([^<[*\s][^\r\n]{0,31}?) (joined|left) the game$/); if (!match) continue;
+      const players = this.state.players.filter(name => name !== match[1]);
+      this.state.players = match[2] === 'joined' ? [...players, match[1]].slice(-100) : players;
+    }
+    this.onChange();
+  }
+  command(text) {
+    const child = this.run; if (!child || !['starting', 'ready'].includes(this.state?.status)) throw new Error('Сервер ещё не запущен');
+    const line = typeof text === 'string' ? text.trim().replace(/^\//, '') : '';
+    if (!line || line.length > 256 || /\p{Cc}/u.test(line)) throw new Error('Команда: одна строка до 256 символов');
+    this.output('> ' + line + '\n'); child.stdin.write(line + '\n'); return true;
+  }
+  async json(url, signal) { const response = await this.fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(25000)]), headers: { 'User-Agent': this.agent } }); if (!response.ok) throw new Error('Сервер загрузки: HTTP ' + response.status); return response.json(); }
   async download(url, file, signal, hash) {
     if (hash && await fs.readFile(file).then(bytes => createHash('sha1').update(bytes).digest('hex') === hash).catch(() => false)) return;
     const response = await this.fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(180000)]) }); if (!response.ok) throw new Error('Загрузка сервера: HTTP ' + response.status);
@@ -68,14 +85,16 @@ class ServerManager {
     for (const name of ['config', 'defaultconfigs']) { const source = path.join(instance.directory, name), destination = path.join(directory, name); if (!await fs.stat(destination).catch(() => null)) await fs.cp(source, destination, { recursive: true, filter: async file => !(await fs.lstat(file)).isSymbolicLink() }).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
     this.update({ skipped });
   }
-  async start(instance, metadata, java, memoryGb, acceptEula, signal) {
+  async start(instance, metadata, java, memoryGb, acceptEula, signal, options) {
     if (this.run) throw new Error('Сервер уже работает. Сначала остановите его');
     const directory = path.join(instance.directory, '.veyra-server'); await plain(directory);
     const accepted = /(?:^|\n)eula\s*=\s*true/.test(await fs.readFile(path.join(directory, 'eula.txt'), 'utf8').catch(() => ''));
     if (!accepted && !acceptEula) throw new Error('Подтвердите согласие с Minecraft EULA');
-    await portFree(this.port);
-    const addresses = [...new Set(Object.values(os.networkInterfaces()).flat().filter(item => item && !item.internal && item.family === 'IPv4').map(item => item.address + ':' + this.port))];
-    this.state = { instanceId: instance.id, directory, host: '0.0.0.0', addresses, port: this.port, memoryGb, status: 'preparing', lines: '', skipped: [], error: '' }; this.onChange();
+    const config = serverConfig(options), port = options?.port || this.port;
+    await portFree(port);
+    const addresses = [...new Set(Object.values(os.networkInterfaces()).flat().filter(item => item && !item.internal && item.family === 'IPv4').map(item => item.address + ':' + port))];
+    this.partial = '';
+    this.state = { instanceId: instance.id, directory, host: '0.0.0.0', addresses, port, memoryGb, config, players: [], startedAt: Date.now(), readyAt: 0, status: 'preparing', lines: '', skipped: [], error: '' }; this.onChange();
     try {
       const base = await this.json(metadata.url, signal); if (!base.downloads?.server?.url) throw new Error('Для этой версии нет выделенного сервера');
       const key = [instance.minecraftVersion, instance.loader, instance.loaderVersion].join(':'); const marker = path.join(directory, '.veyra-server-ready.json');
@@ -101,14 +120,14 @@ class ServerManager {
       await this.syncMods(instance, directory, signal);
       await fs.writeFile(path.join(directory, 'eula.txt'), 'eula=true\n');
       let properties = await fs.readFile(path.join(directory, 'server.properties'), 'utf8').catch(() => '');
-      for (const [key, value] of Object.entries({ 'server-port': this.port, 'server-ip': '0.0.0.0', 'online-mode': 'false', 'enable-rcon': 'false', 'enable-query': 'false' })) { properties = properties.replace(new RegExp('^' + key + '=.*(?:\\r?\\n|$)', 'gm'), ''); properties += '\n' + key + '=' + value + '\n'; }
+      for (const [key, value] of Object.entries(serverProperties(config, port))) { properties = properties.replace(new RegExp('^' + key + '=.*(?:\\r?\\n|$)', 'gm'), ''); properties += '\n' + key + '=' + value + '\n'; }
       await fs.writeFile(path.join(directory, 'server.properties'), properties);
-      await portFree(this.port); signal.throwIfAborted();
+      await portFree(port); signal.throwIfAborted();
       const child = this.spawn(java, ['-Xms512M', '-Xmx' + memoryGb + 'G', ...args, 'nogui'], { cwd: directory, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
       this.run = child; this.update({ status: 'starting', pid: child.pid });
       child.stdin?.on('error', error => this.output(error.message + '\n')); child.stdout?.on('data', bytes => this.output(bytes)); child.stderr?.on('data', bytes => this.output(bytes));
-      child.once('error', error => { if (this.run !== child) return; this.run = null; this.update({ status: 'error', error: error.message }); });
-      child.once('close', code => { if (this.run && this.run !== child) return; this.run = null; this.update({ status: code === 0 || this.state.status === 'stopping' ? 'stopped' : 'error', error: code && this.state.status !== 'stopping' ? 'Сервер завершился с кодом ' + code + '. Проверьте журнал и совместимость модов' : '' }); });
+      child.once('error', error => { if (this.run !== child) return; this.run = null; this.update({ status: 'error', error: error.message, players: [] }); });
+      child.once('close', code => { if (this.run && this.run !== child) return; this.run = null; this.update({ players: [], status: code === 0 || this.state.status === 'stopping' ? 'stopped' : 'error', error: code && this.state.status !== 'stopping' ? 'Сервер завершился с кодом ' + code + '. Проверьте журнал и совместимость модов' : '' }); });
       return this.state;
     } catch (error) { this.update({ status: signal.aborted ? 'stopped' : 'error', error: signal.aborted ? '' : error.message }); throw error; }
   }

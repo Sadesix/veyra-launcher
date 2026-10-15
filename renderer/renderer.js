@@ -23,6 +23,8 @@
   const setText = (id, value) => { if (el(id).textContent !== String(value)) el(id).textContent = String(value); };
   const countText = (n) => n + ' ' + (n % 10 === 1 && n % 100 !== 11 ? 'сборка' : (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? 'сборки' : 'сборок'));
   const memoryMaximum = () => Math.max(1, Number(state.data?.maxMemoryGb) || 16);
+  const viewTitles = { home: 'Главная', instances: 'Сборки', server: 'Сервер', trophies: 'Достижения', logs: 'Журнал', settings: 'Настройки' };
+  const hoursText = (ms) => ms >= 3600000 ? Math.floor(ms / 3600000) + 'ч' : ms >= 60000 ? Math.floor(ms / 60000) + 'м' : '';
 
   function notice(message, crash = false) {
     setText('notice-text', message);
@@ -41,27 +43,61 @@
     try { return await callback(); }
     catch (error) { const form = [...document.querySelectorAll('dialog[open]')].at(-1)?.querySelector('form'); if (form) window.veyraValidation.alert(form, friendlyError(error)); else notice(friendlyError(error)); return null; }
   }
+  // Незавершённый переход сворачивается сразу: быстрые нажатия не накладывают разделы друг на друга.
+  function settleView() {
+    const motion = state.viewMotion;
+    if (!motion) return;
+    state.viewMotion = null;
+    for (const animation of motion.animations) animation.cancel();
+    motion.leaving.classList.remove('is-leaving');
+    motion.leaving.inert = false;
+    for (const key of ['top', 'left', 'width']) motion.leaving.style.removeProperty(key);
+    if (motion.leaving.dataset.page !== state.view) motion.leaving.hidden = true;
+    document.querySelector('.content').classList.remove('is-switching');
+  }
   function showView(view) {
     hideContextMenu();
-    if (state.view !== view) document.querySelector('.content').scrollTop = 0;
+    settleView();
+    const content = document.querySelector('.content'), pages = [...document.querySelectorAll('[data-page]')];
+    const order = [...document.querySelectorAll('.rail-nav .rail-button')].map(button => button.dataset.view);
+    const forward = order.indexOf(view) >= order.indexOf(state.view) ? 1 : -1;
+    // Прежний раздел запоминает своё место до сброса прокрутки и уезжает поверх нового.
+    const leaving = state.view !== view && !window.matchMedia('(prefers-reduced-motion: reduce)').matches ? pages.find(page => page.dataset.page === state.view && !page.hidden) : null;
+    const place = leaving && { page: leaving.getBoundingClientRect(), content: content.getBoundingClientRect() };
+    if (state.view !== view) content.scrollTop = 0;
     if (state.view === 'settings' && view !== 'settings') applyAppearance(state.data?.settings.appearance);
     state.view = view;
-    for (const page of document.querySelectorAll('[data-page]')) {
+    for (const page of pages) {
       const active = page.dataset.page === view;
       page.hidden = !active;
       page.classList.toggle('is-visible', active);
+    }
+    if (leaving) {
+      const entering = pages.find(page => page.dataset.page === view);
+      leaving.hidden = false;
+      leaving.inert = true;
+      leaving.classList.add('is-leaving');
+      Object.assign(leaving.style, { top: place.page.top - place.content.top + 'px', left: place.page.left - place.content.left + 'px', width: place.page.width + 'px' });
+      content.classList.add('is-switching');
+      const animations = [
+        leaving.animate([{ opacity: 1, transform: 'translateX(0)' }, { opacity: 0, transform: 'translateX(' + -28 * forward + 'px)' }], { duration: 200, easing: 'cubic-bezier(.4,0,1,1)', fill: 'forwards' }),
+        entering.animate([{ opacity: 0, transform: 'translateX(' + 28 * forward + 'px)' }, { opacity: 1, transform: 'translateX(0)' }], { duration: 240, easing: 'cubic-bezier(.16,1,.3,1)' }),
+      ];
+      state.viewMotion = { leaving, animations };
+      animations[1].finished.then(settleView, () => {});
     }
     for (const button of document.querySelectorAll('.rail-button')) {
       button.classList.toggle('is-active', button.dataset.view === view);
     }
     const navButtons = [...document.querySelectorAll('.rail-nav .rail-button')];
     const currentButton = navButtons.find((button) => button.dataset.view === view);
-    el('rail-nav').style.setProperty('--nav-y', (currentButton?.offsetTop || 0) + 'px');
-    setText('view-title', { home: 'Главная', instances: 'Сборки', logs: 'Журнал', settings: 'Настройки' }[view]);
+    el('rail-nav').style.setProperty('--nav-x', (currentButton?.offsetLeft || 0) + 'px');
+    setText('view-title', viewTitles[view]);
     el('search-input').closest('.search-box').hidden = view !== 'home' && view !== 'instances';
     if (view === 'logs') refreshLogs();
     if (view === 'settings') renderSettings();
     if (view === 'instances' || view === 'home') renderCards();
+    window.dispatchEvent(new CustomEvent('veyra:view', { detail: { view } }));
   }
   function filteredInstances() {
     const query = el('search-input').value.trim().toLowerCase();
@@ -81,6 +117,8 @@
     const hint = document.createElement('small');
     hint.textContent = 'Отдельная папка для новой игры';
     button.append(marker, title, hint);
+    button.dataset.tip = 'Новая сборка';
+    button.dataset.tipLore = 'Своя версия, загрузчик и папка';
     button.addEventListener('click', openCreate);
     return button;
   }
@@ -123,9 +161,21 @@
     version.textContent = 'Minecraft ' + instance.minecraftVersion;
     const status = document.createElement('span');
     status.className = 'instance-state';
-    status.textContent = instance.installed ? 'Готов к игре' : 'Нужна установка';
+    // На полке главной подпись короткая, в разделе сборок — полная.
+    for (const [className, text] of [['state-long', instance.installed ? 'Готов к игре' : 'Нужна установка'], ['state-short', instance.installed ? 'Готов' : 'Не скачана']]) {
+      const part = document.createElement('span');
+      part.className = className;
+      part.textContent = text;
+      status.append(part);
+    }
     content.append(top, name, version, status);
-    button.append(art, shade, content);
+    const hours = document.createElement('span');
+    hours.className = 'instance-hours';
+    hours.textContent = hoursText(instance.playedMs || 0);
+    button.append(art, shade, content, hours);
+    button.dataset.tip = instance.name;
+    button.dataset.tipLore = [loaderLabel(instance) + ' · Minecraft ' + instance.minecraftVersion, instance.installed ? 'Готов к игре' : 'Нужна установка',
+      instance.playedMs >= 60000 ? 'Сыграно: ' + duration(instance.playedMs) : 'Впереди первая игра', 'ПКМ — действия'].join('\n');
     button.addEventListener('click', async () => {
       closeQuickRename();
       await action(() => api.selectInstance(instance.id));
@@ -136,12 +186,12 @@
   }
   function renderCards() {
     const items = filteredInstances();
-    for (const [id, limit] of [['home-instance-grid', 4], ['all-instance-grid', Infinity]]) {
+    for (const [id, limit] of [['home-instance-grid', 6], ['all-instance-grid', Infinity]]) {
       const grid = el(id);
       const current = new Map([...grid.querySelectorAll('[data-instance-id]')].map(card => [card.dataset.instanceId, card]));
       const ordered = [];
       for (const [index, instance] of items.slice(0, limit).entries()) {
-        const signature = JSON.stringify([instance.name, instance.accent, instance.coverUrl, instance.favorite, instance.installed, instance.loader, instance.loaderVersion, instance.minecraftVersion]);
+        const signature = JSON.stringify([instance.name, instance.accent, instance.coverUrl, instance.favorite, instance.installed, instance.loader, instance.loaderVersion, instance.minecraftVersion, hoursText(instance.playedMs || 0)]);
         let card = current.get(instance.id);
         if (!card || card.dataset.signature !== signature) {
           const replacement = instanceCard(instance);
@@ -170,8 +220,8 @@
     if (!item) {
       closeQuickRename();
       el('hero-image').style.backgroundImage = '';
-      for (const id of ['detail-loader', 'detail-version', 'detail-folder', 'capsule-last']) setText(id, '—');
-      setText('detail-java', 'Автоматически');
+      for (const id of ['detail-folder', 'capsule-last']) setText(id, '—');
+      setText('detail-java', 'Авто');
       setText('detail-memory', (state.data?.settings.memoryGb || 4) + ' ГБ');
       setText('capsule-note', 'Создайте сборку и оставьте первую заметку к сборке.');
       setText('capsule-launches', '0');
@@ -192,12 +242,9 @@
     setText('hero-description', item.installed
       ? 'Сборка готова. Моды, сохранения и настройки останутся внутри этой сборки.'
       : 'Сборка создана. Установите игру, чтобы начать.');
-    setText('detail-loader', loaderLabel(item));
-    el('detail-loader').title = loaderLabel(item);
-    setText('detail-version', item.minecraftVersion);
-    setText('detail-java', item.javaPath || state.data.settings.javaPath ? 'Своя Java' : 'Автоматически');
+    setText('detail-java', item.javaPath || state.data.settings.javaPath ? 'Своя' : 'Авто');
     setText('detail-memory', (item.memoryGb || state.data.settings.memoryGb) + ' ГБ');
-    setText('detail-folder', item.legacy ? 'Старая папка' : 'Своя папка');
+    setText('detail-folder', item.legacy ? 'Старая' : 'Своя');
     el('detail-folder').title = item.directory;
     setText('capsule-note', item.note || 'Оставьте здесь цель или напоминание для этой сборки.');
     el('capsule-note').title = item.note || '';
@@ -253,6 +300,7 @@
     el('memory-gb').value = settings.memoryGb;
     el('memory-range').value = settings.memoryGb;
     setText('memory-limit-hint', 'На компьютере ' + state.data.systemMemoryGb + ' ГБ. Лимит для игры — ' + maximum + ' ГБ; 2 ГБ оставляем системе.');
+    renderMemoryBlocks();
     for (const button of document.querySelectorAll('[data-memory]')) button.disabled = Number(button.dataset.memory) > maximum;
     el('show-snapshots').checked = settings.showSnapshots;
     el('discord-enabled').checked = settings.discordEnabled;
@@ -265,6 +313,22 @@
     el('data-path').title = state.data.instancesDirectory;
     state.appearanceDraft = { ...settings.appearance };
     renderAppearance();
+  }
+  function renderMemoryBlocks() {
+    const target = el('memory-blocks'), maximum = memoryMaximum(), value = Number(el('memory-gb').value) || 1;
+    if (target.childElementCount !== Math.min(maximum, 32)) {
+      target.replaceChildren();
+      for (let amount = 1; amount <= Math.min(maximum, 32); amount++) {
+        const block = document.createElement('button');
+        block.type = 'button';
+        block.dataset.memoryBlock = String(amount);
+        block.setAttribute('aria-label', amount + ' ГБ');
+        block.dataset.tip = amount + ' ГБ';
+        block.addEventListener('click', () => { el('memory-gb').value = amount; el('memory-range').value = amount; renderMemoryBlocks(); });
+        target.append(block);
+      }
+    }
+    for (const block of target.children) block.classList.toggle('is-filled', Number(block.dataset.memoryBlock) <= value);
   }
   function renderJavaMode() {
     const automatic = state.javaMode === 'auto';
@@ -329,7 +393,7 @@
     setText('profile-avatar', Array.from(account.name)[0]?.toUpperCase() || 'P');
     setText('profile-active-name', account.name);
     setText('profile-active-mode', account.mode === 'microsoft' ? (MICROSOFT_UI_ENABLED ? 'Microsoft · Minecraft Java' : 'Игровой профиль') : 'Локальный профиль');
-    el('profile-rail').title = 'Профиль: ' + account.name;
+    el('profile-rail').dataset.tipLore = account.name;
     for (const button of document.querySelectorAll('[data-account-mode]')) {
       button.classList.toggle('is-selected', button.dataset.accountMode === state.profileTab);
     }
@@ -416,7 +480,7 @@
       const title = document.createElement('strong');
       title.textContent = version.id;
       const subtitle = document.createElement('small');
-      subtitle.textContent = index === 0 && !query ? (kind === 'snapshot' ? 'Свежий Snapshot' : 'Последняя версия') : (kind === 'snapshot' ? 'Snapshot' : 'Релиз');
+      subtitle.textContent = index === 0 && !query ? (kind === 'snapshot' ? 'Новый Snapshot' : 'Последняя') : (kind === 'snapshot' ? 'Snapshot' : 'Релиз');
       button.append(icon('check'), title, subtitle);
       button.addEventListener('click', () => {
         el('create-version').value = version.id;
@@ -437,10 +501,20 @@
     }
     el('version-more').hidden = versions.length <= (state.versionLimit || 24);
     setText('chosen-version', el('create-version').value || 'Выберите версию');
+    renderRecipe();
     for (const button of document.querySelectorAll('[data-version-kind]')) {
       button.classList.toggle('is-active', button.dataset.versionKind === kind);
       button.setAttribute('aria-pressed', String(button.dataset.versionKind === kind));
     }
+  }
+  function renderRecipe() {
+    const version = el('create-version').value;
+    setText('recipe-version-label', version || '—');
+    el('recipe-version').classList.toggle('is-empty', !version);
+    el('recipe-loader-icon').src = loaderIcon(state.loader);
+    setText('recipe-loader-label', loaderNames[state.loader] + (state.loader !== 'vanilla' && el('create-loader-version').value ? ' ' + el('create-loader-version').value : ''));
+    setText('recipe-result-label', el('create-name').value.trim() || suggestedName());
+    el('recipe-result').classList.toggle('is-ready', !el('create-submit').disabled);
   }
   function renderGreeting() {
     if (!state.data) return;
@@ -632,6 +706,7 @@
     }
     setText('chosen-loader-version', el('create-loader-version').value || '');
     el('loader-version-more').hidden = versions.length <= (state.loaderVersionLimit || 8);
+    renderRecipe();
   }
   function setConsoleVisible(visible) {
     const panel = el('install-scroll');
@@ -717,16 +792,8 @@
   }
   function hideContextMenu() { el('build-context-menu').hidden = true; }
   function openContextMenu(event, id) {
-    event.preventDefault();
-    if (document.querySelector('dialog[open]')) return;
     const item = instances().find(entry => entry.id === id);
-    const menu = el('build-context-menu');
-    menu.replaceChildren();
-    const heading = document.createElement('p');
-    heading.className = 'context-heading';
-    heading.textContent = item?.name || 'Библиотека';
-    menu.append(heading);
-    const entries = item ? [
+    showMenu(event, item?.name || 'Библиотека', item ? [
       [(state.data.runningClients || []).some(run => run.instanceId === id) ? 'stop' : item.installed ? 'play' : 'download', (state.data.runningClients || []).some(run => run.instanceId === id) ? 'Остановить клиентов' : item.installed ? 'Играть' : 'Установить', async () => {
         await api.selectInstance(id); showView('home');
         if ((state.data.runningClients || []).some(run => run.instanceId === id)) await api.stopGame('', id);
@@ -739,7 +806,18 @@
       ['folder', 'Открыть папку', () => api.openInstanceFolder(id)],
       ['settings', 'Настройки сборки', () => openEdit(item)],
       ['trash', 'Удалить сборку', () => { state.removingId = id; showDialog(el('remove-dialog')); }, Boolean(state.data.operation?.instanceId === id || state.data.runningInstanceId === id)],
-    ] : [['plus', 'Новая сборка', openCreate], ['folder', 'Папка сборок', () => api.openDataFolder()]];
+    ] : [['plus', 'Новая сборка', openCreate], ['folder', 'Папка сборок', () => api.openDataFolder()]]);
+  }
+  // Общее меню по правой кнопке: заголовок и пункты [иконка, подпись, действие, недоступен].
+  function showMenu(event, title, entries) {
+    event.preventDefault();
+    if (document.querySelector('dialog[open]')) return;
+    const menu = el('build-context-menu');
+    menu.replaceChildren();
+    const heading = document.createElement('p');
+    heading.className = 'context-heading';
+    heading.textContent = title;
+    menu.append(heading);
     for (const [glyph, label, callback, disabled] of entries) {
       const button = document.createElement('button');
       button.type = 'button';
@@ -767,7 +845,7 @@
     const loader = state.loader;
     const field = el('loader-version-field');
     field.hidden = loader === 'vanilla';
-    if (field.hidden) { el('create-submit').disabled = !el('create-version').value; return; }
+    if (field.hidden) { el('create-submit').disabled = !el('create-version').value; renderRecipe(); return; }
     const select = el('create-loader-version');
     state.loaderVersions = [];
     state.loaderVersionLimit = 8;
@@ -792,6 +870,7 @@
       renderLoaderTiles();
       el('loader-version-hint').textContent = versions.length + ' совместимых версий';
       el('create-submit').disabled = false;
+      renderRecipe();
     } catch (error) {
       if (token !== state.loaderRequest) return;
       select.replaceChildren(new Option('Не удалось получить версии', ''));
@@ -889,6 +968,52 @@
     for (const button of document.querySelectorAll('[data-studio-tab]')) { const active = button.dataset.studioTab === tab; button.classList.toggle('is-active', active); button.setAttribute('aria-pressed', String(active)); }
     for (const panel of document.querySelectorAll('[data-studio-panel]')) panel.hidden = panel.dataset.studioPanel !== tab;
     el('studio-error').hidden = true;
+    if (tab === 'shots') loadShots();
+  }
+  async function loadShots() {
+    const id = state.editingId, grid = el('shots-grid');
+    const item = instances().find(entry => entry.id === id);
+    const shots = await studioAction(() => api.getScreenshots(id));
+    if (!shots || id !== state.editingId) return;
+    const starred = shots.filter(shot => shot.favorite).length;
+    setText('shots-hint', shots.length ? 'Кадров: ' + shots.length + (starred ? ' · избранных: ' + starred : '') + ' · любой можно сделать обложкой' : 'Кадры из папки screenshots этой сборки');
+    grid.replaceChildren();
+    if (!shots.length) {
+      const empty = document.createElement('div');
+      empty.className = 'shots-empty';
+      const title = document.createElement('strong'); title.textContent = 'Пока нет скриншотов';
+      const hint = document.createElement('p'); hint.textContent = 'Нажмите F2 в игре — кадры появятся здесь, и любой можно сделать обложкой сборки.';
+      empty.append(icon('camera'), title, hint);
+      grid.append(empty);
+      return;
+    }
+    for (const shot of shots) {
+      const card = document.createElement('figure');
+      card.className = 'shot' + (shot.favorite ? ' is-favorite' : '');
+      const image = document.createElement('img'); image.src = shot.url; image.alt = ''; image.loading = 'lazy'; image.draggable = false;
+      const caption = document.createElement('figcaption');
+      caption.textContent = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(shot.time));
+      const actions = document.createElement('div');
+      const cover = document.createElement('button'); cover.type = 'button'; cover.className = 'button button-primary'; cover.textContent = 'Сделать обложкой'; cover.disabled = Boolean(item?.legacy);
+      cover.addEventListener('click', async () => {
+        const updated = await studioAction(() => api.coverFromScreenshot(id, shot.name));
+        if (!updated) return;
+        state.editCustomUrl = instances().find(entry => entry.id === id)?.coverUrl || ''; state.editUsePreset = false;
+        renderCoverPreview(instances().find(entry => entry.id === id));
+        toast('Скриншот стал обложкой');
+      });
+      const copy = document.createElement('button'); copy.type = 'button'; copy.className = 'button button-secondary shot-copy'; copy.textContent = 'Скопировать';
+      copy.addEventListener('click', async () => { if (await studioAction(() => api.copyScreenshot(id, shot.name))) toast('Скриншот скопирован'); });
+      const star = document.createElement('button'); star.type = 'button'; star.className = 'button-icon shot-star' + (shot.favorite ? ' is-active' : '');
+      star.dataset.tip = shot.favorite ? 'Убрать из избранного' : 'В избранное'; star.setAttribute('aria-label', star.dataset.tip); star.setAttribute('aria-pressed', String(Boolean(shot.favorite))); star.append(icon('star'));
+      // Избранные кадры встают первыми, поэтому список перечитывается.
+      star.addEventListener('click', async () => { if (await studioAction(() => api.favoriteScreenshot(id, shot.name, !shot.favorite))) loadShots(); });
+      const open = document.createElement('button'); open.type = 'button'; open.className = 'button-icon'; open.dataset.tip = 'Открыть скриншот'; open.setAttribute('aria-label', 'Открыть скриншот'); open.append(icon('image'));
+      open.addEventListener('click', () => studioAction(() => api.openScreenshot(id, shot.name)));
+      actions.append(cover, copy, star, open);
+      card.append(image, caption, actions);
+      grid.append(card);
+    }
   }
   function renderStudioText() {
     setText('instance-dialog-title', el('edit-name').value.trim() || suggestedName(state.editingId));
@@ -984,20 +1109,7 @@
   }
   function bind() {
     window.addEventListener('veyra:notify', event => toast(event.detail.message, event.detail.undo));
-    for (const icon of document.querySelectorAll('svg.icon')) {
-      const name = icon.querySelector('use')?.getAttribute('href')?.replace('#i-', '');
-      if (name) icon.dataset.motion = name;
-    }
-    document.addEventListener('click', (event) => {
-      const button = event.target.closest('button');
-      const icon = button?.querySelector('svg.icon');
-      if (!icon || button.disabled || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-      if (icon.dataset.motion === 'settings' || icon.dataset.motion === 'refresh') {
-        icon.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(180deg)' }], { duration: 600, easing: 'cubic-bezier(.16,1,.3,1)' });
-      } else {
-        icon.animate([{ scale: 1 }, { scale: .75, offset: .2 }, { scale: 1.2, offset: .55 }, { scale: 1 }], { duration: 460, easing: 'cubic-bezier(.2,.8,.2,1)' });
-      }
-    });
+    window.veyraMenu = showMenu;
     for (const button of document.querySelectorAll('[data-view]')) {
       button.addEventListener('click', () => showView(button.dataset.view));
     }
@@ -1095,6 +1207,13 @@
       });
     }
     el('search-input').addEventListener('input', renderCards);
+    // Колесо над хотбаром листает разделы, как слоты в игре.
+    el('rail-nav').addEventListener('wheel', (event) => {
+      const buttons = [...document.querySelectorAll('.rail-nav .rail-button:not([hidden])')], index = buttons.findIndex(button => button.dataset.view === state.view);
+      if (!event.deltaY || Date.now() - (state.wheelAt || 0) < 140) return;
+      state.wheelAt = Date.now();
+      showView(buttons[(index + (event.deltaY > 0 ? 1 : -1) + buttons.length) % buttons.length].dataset.view);
+    }, { passive: true });
     document.addEventListener('keydown', (event) => {
       const dialog = document.querySelector('dialog[open]:not(.is-closing)');
       if (event.key === 'Escape' && dialog && !event.defaultPrevented) {
@@ -1102,6 +1221,9 @@
         closeDialog(dialog);
         return;
       }
+      const slot = /^[1-6]$/.test(event.key) && !event.ctrlKey && !event.altKey && !event.metaKey && !document.querySelector('dialog[open]') &&
+        !document.activeElement?.matches('input:not([type="checkbox"]):not([type="range"]), textarea, select') && document.querySelectorAll('.rail-nav .rail-button:not([hidden])')[Number(event.key) - 1];
+      if (slot) { event.preventDefault(); showView(slot.dataset.view); return; }
       if (event.ctrlKey && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         showView('instances');
@@ -1234,6 +1356,7 @@
       });
     }
     el('create-version').addEventListener('change', () => { renderVersionTiles(); refreshLoaderOptions(); });
+    el('create-name').addEventListener('input', renderRecipe);
     el('create-form').addEventListener('submit', async (event) => {
       event.preventDefault();
       if (state.busy) return;
@@ -1308,7 +1431,6 @@
       const choices = state.data.backgrounds.filter(item => item.id !== 'default' && item.id !== state.editBackground);
       const value = new Uint32Array(1); crypto.getRandomValues(value);
       chooseBackground(choices[value[0] % choices.length].id);
-      el('random-cover').animate([{ rotate: '0deg' }, { rotate: '180deg' }], { duration: matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 480, easing: 'cubic-bezier(.2,.8,.2,1)' });
     });
     el('studio-scene').addEventListener('pointermove', event => {
       if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -1317,6 +1439,7 @@
       event.currentTarget.style.setProperty('--scene-y', ((event.clientY - rect.top) / rect.height - .5) * 12 + 'px');
     });
     el('studio-scene').addEventListener('pointerleave', event => { event.currentTarget.style.setProperty('--scene-x', '0px'); event.currentTarget.style.setProperty('--scene-y', '0px'); });
+    el('shots-folder').addEventListener('click', () => studioAction(() => api.openScreenshotsFolder(state.editingId)));
     el('studio-content').addEventListener('click', () => { el('instance-dialog').close(); window.dispatchEvent(new CustomEvent('veyra:content-open', { detail: { id: state.editingId } })); });
     el('discord-enabled').addEventListener('change', async () => {
       const result = await action(() => api.saveSettings({ discordEnabled: el('discord-enabled').checked }));
@@ -1339,13 +1462,14 @@
     });
     el('memory-gb').addEventListener('input', () => {
       el('memory-range').value = Math.min(memoryMaximum(), Math.max(1, Number(el('memory-gb').value) || 1));
+      renderMemoryBlocks();
     });
     el('memory-gb').addEventListener('change', () => {
       el('memory-gb').value = Math.min(memoryMaximum(), Math.max(1, Number(el('memory-gb').value) || 1));
     });
-    el('memory-range').addEventListener('input', () => { el('memory-gb').value = el('memory-range').value; });
+    el('memory-range').addEventListener('input', () => { el('memory-gb').value = el('memory-range').value; renderMemoryBlocks(); });
     for (const button of document.querySelectorAll('[data-memory]')) {
-      button.addEventListener('click', () => { el('memory-gb').value = button.dataset.memory; el('memory-range').value = button.dataset.memory; });
+      button.addEventListener('click', () => { el('memory-gb').value = button.dataset.memory; el('memory-range').value = button.dataset.memory; renderMemoryBlocks(); });
     }
     el('save-settings').addEventListener('click', async () => {
       if (!window.veyraValidation.validate(el('settings-page'))) return;
@@ -1363,17 +1487,23 @@
     for (const id of ['open-data-folder', 'settings-open-data']) el(id).addEventListener('click', () => action(() => api.openDataFolder()));
     el('reload-logs').addEventListener('click', refreshLogs);
   }
+  // Готовность — флаг плюс событие: скрипты, подключённые позже, увидят флаг, даже если событие уже прошло.
+  function ready() {
+    window.veyraReady = true;
+    window.dispatchEvent(new Event('veyra:ready'));
+  }
   async function initialize() {
     bind();
     api.onEvent(receive);
     const data = await action(() => api.getState());
-    if (!data) return;
+    if (!data) return ready();
     state.data = data;
     render();
     setText('footer-message', 'Готов к игре');
     showView('home');
+    ready();
+    // Java ищет главный процесс сразу после появления окна и присылает результат сам.
     if (!data.versions.length) await action(() => api.refreshVersions());
-    action(() => api.scanJava());
     setInterval(() => { renderGreeting(); renderPlaytime(); }, 1000);
   }
   initialize();

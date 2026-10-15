@@ -106,6 +106,8 @@ async function main() {
     await page.evaluate(() => window.launcher.refreshVersions());
     assert.match(await page.locator('#hero-loader').textContent(), /Forge 99\.0\.1/);
     assert.match(await page.locator('#home-instance-grid').textContent(), /Forge 99\.0\.1/);
+    // Геометрия сравнивается после заставки, когда элементы сцены уже стоят на местах.
+    await page.waitForFunction(() => document.getElementById('intro').hidden && !document.body.classList.contains('is-booting'));
     const before = await page.locator('#hero-description').boundingBox();
     await page.locator('#hero-rename').click();
     const during = await page.locator('#hero-description').boundingBox();

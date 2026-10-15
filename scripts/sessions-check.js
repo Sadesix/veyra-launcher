@@ -18,6 +18,8 @@ async function main() {
   const app = await electron.launch({ executablePath: process.argv[2] ? path.resolve(process.argv[2]) : undefined, args: process.argv[2] ? [] : ['.'], cwd: workspace, env: { ...process.env, VEYRA_TEST_DATA_DIR: data }, timeout: 120000 });
   try {
     const page = await app.firstWindow(), errors = []; page.on('pageerror', error => errors.push(error.message)); await page.waitForFunction(() => document.getElementById('hero-name').textContent === 'Together');
+    // Основной лаунчер сам записывает достижение «Первый блок» сразу после загрузки — снимок делается после него.
+    for (let attempt = 0; attempt < 100 && !fs.readFileSync(path.join(data, 'settings.json'), 'utf8').includes('"first-build"'); attempt++) await page.waitForTimeout(100);
     const savedSettings = fs.readFileSync(path.join(data, 'settings.json'), 'utf8');
     const duplicate = require('node:child_process').spawn(process.argv[2] ? path.resolve(process.argv[2]) : require('electron'), process.argv[2] ? [] : ['.'], { cwd: workspace, windowsHide: true, stdio: 'ignore', env: { ...process.env, VEYRA_TEST_DATA_DIR: data } });
     try { await new Promise((resolve, reject) => { const timer = setTimeout(() => reject(new Error('Duplicate launcher did not exit')), 7000); duplicate.once('error', error => { clearTimeout(timer); reject(error); }); duplicate.once('exit', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error('Duplicate launcher exited with ' + code)); }); }); } finally { if (duplicate.exitCode == null) duplicate.kill(); }

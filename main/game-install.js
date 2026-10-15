@@ -2,11 +2,8 @@ const { createHash } = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { MinecraftFolder, Version } = require('@xmcl/core');
-const {
-  installVersionTask,
-  installResolvedLibrariesTask,
-  installResolvedAssetsTask,
-} = require('@xmcl/installer');
+// @xmcl/installer загружается ~0,2 с, поэтому подключается при первой установке, а не при запуске лаунчера.
+const installer = () => require('@xmcl/installer');
 
 function cancelled(operation) {
   if (operation.signal?.aborted) throw new Error('Операция отменена');
@@ -66,7 +63,7 @@ async function installLibraries(version, directory, operation, runTask, progress
     for (let attempt = 1; attempt <= 3; attempt++) {
       cancelled(operation);
       try {
-        const task = installResolvedLibrariesTask(batch, directory, { throwErrorImmediately: true });
+        const task = installer().installResolvedLibrariesTask(batch, directory, { throwErrorImmediately: true });
         await runTask(task, operation, 'Библиотеки');
         lastError = null;
         break;
@@ -100,7 +97,7 @@ async function installAssets(version, directory, operation, runTask, progress) {
     for (let attempt = 1; attempt <= 3; attempt++) {
       cancelled(operation);
       try {
-        await runTask(installResolvedAssetsTask(batch, folder), operation, 'Ресурсы', (rootTask) => {
+        await runTask(installer().installResolvedAssetsTask(batch, folder), operation, 'Ресурсы', (rootTask) => {
           const current = Number.isFinite(rootTask.progress) ? rootTask.progress : 0;
           progress({
             phase: 'Ресурсы',
@@ -131,7 +128,7 @@ async function installAssets(version, directory, operation, runTask, progress) {
 async function installBase(instance, metadata, operation, runTask, progress) {
   await fs.mkdir(instance.directory, { recursive: true });
   progress({ phase: 'Minecraft', completed: 0, total: 0, message: 'Получаем файлы версии ' + instance.minecraftVersion });
-  const version = await runTask(installVersionTask(metadata, instance.directory, { side: 'client' }), operation, 'Minecraft');
+  const version = await runTask(installer().installVersionTask(metadata, instance.directory, { side: 'client' }), operation, 'Minecraft');
   cancelled(operation);
   await installLibraries(version, instance.directory, operation, runTask, progress);
   cancelled(operation);

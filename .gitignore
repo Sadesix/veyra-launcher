@@ -3,3 +3,9 @@ dist/
 test-output/
 build/
 *.log
+site/downloads/
+.veyra-site.json
+site/inc/config.php
+site/data/
+site/latest.json
+site/*.zip

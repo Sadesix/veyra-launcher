@@ -1,18 +1,27 @@
 {
   "name": "veyra-launcher",
-  "version": "0.7.0",
+  "version": "0.8.1",
   "private": true,
   "description": "Veyra Launcher — современный лаунчер Minecraft Java Edition для Windows",
   "main": "main/desktop.js",
   "author": "Veyra Launcher",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win portable",
+    "dist": "electron-builder --win dir && node scripts/build-installer.js",
+    "installer": "node scripts/build-installer.js",
     "icon": "node scripts/create-icon.js",
     "smoke": "node scripts/smoke.js",
     "check:auth": "node scripts/auth-check.js",
     "check:accounts": "node scripts/auth-ui-check.js",
-    "compat": "node scripts/build-compat.js"
+    "compat": "node scripts/build-compat.js",
+    "site": "node scripts/build-site.js",
+    "site:shots": "node scripts/site-shots.js",
+    "site:deploy": "node scripts/build-site.js && node scripts/deploy-site.js",
+    "check:updates": "node scripts/update-check.js",
+    "check:installer": "node scripts/installer-check.js",
+    "check:site": "node scripts/site-check.js && node scripts/site-php-check.js",
+    "release": "npm run dist && node scripts/publish.js",
+    "release:upload": "node scripts/publish.js"
   },
   "dependencies": {
     "@xmcl/core": "2.15.1",
@@ -39,11 +48,12 @@
       "main/**/*",
       "renderer/**/*",
       "assets/**/*",
+      "!assets/brand/**",
       "package.json"
     ],
     "win": {
       "icon": "assets/icon.ico",
-      "target": "portable"
+      "target": "dir"
     },
     "artifactName": "Veyra-Launcher-${version}-${arch}.${ext}"
   }

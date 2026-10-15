@@ -10,7 +10,7 @@
   const build = () => s.data?.instances.find(item => item.id === s.id);
   const bytes = size => size == null ? 'Папка' : size < 1024 ? size + ' Б' : size < 1024 ** 2 ? Math.round(size / 1024) + ' КБ' : (size / 1024 ** 2).toFixed(1) + ' МБ';
   const node = (tag, className, text) => { const value = document.createElement(tag); if (className) value.className = className; if (text !== undefined) value.textContent = text; return value; };
-  const icon = name => { const value = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); value.classList.add('icon'); value.dataset.motion = name; const use = document.createElementNS(value.namespaceURI, 'use'); use.setAttribute('href', '#i-' + name); value.append(use); return value; };
+  const icon = name => { const value = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); value.classList.add('icon'); const use = document.createElementNS(value.namespaceURI, 'use'); use.setAttribute('href', '#i-' + name); value.append(use); return value; };
   const locked = () => s.working || Boolean(s.data?.operation || s.data?.runningInstanceId || s.data?.server?.pid && !['stopped','error'].includes(s.data.server.status));
   function error(message, plan = false) { const target = el(plan ? 'content-plan-error' : 'content-error'); target.textContent = String(message || '').replace(/^Error invoking remote method '[^']+': (?:Error: )?/, ''); target.hidden = !message; }
   function notify(message, undo) {
@@ -222,12 +222,12 @@
     } catch (failure) { if (request === s.planRequest) { el('content-plan-title').textContent = 'Не удалось подобрать файлы'; el('content-plan-entries').replaceChildren(); error(failure.message, true); } }
     finally { if (request === s.planRequest) renderBusy(); }
   }
-  async function open(id) {
+  async function open(id, kind = 'mods') {
     s.data = await api.getState(); s.id = id; if (!build()) return;
     let cartFailure = '';
     try { s.cart = await api.getCart(id); } catch (failure) { s.cart = []; cartFailure = failure.message; }
     s.cartPlan = null; s.cartOpen = s.cart.length > 0 || Boolean(cartFailure);
-    s.kind = 'mods'; s.mode = s.cart.length ? 'catalog' : 'installed'; s.offset = 0; el('content-search').value = ''; el('content-local-filter').value = 'all'; closePlan(); error(''); renderHeader(); renderCart();
+    s.kind = names[kind] ? kind : 'mods'; s.mode = s.cart.length && s.kind !== 'saves' ? 'catalog' : 'installed'; s.offset = 0; el('content-search').value = ''; el('content-local-filter').value = 'all'; closePlan(); error(''); renderHeader(); renderCart();
     clearTimeout(el('content-dialog').closeTimer); el('content-dialog').classList.remove('is-closing'); if (!el('content-dialog').open) el('content-dialog').showModal();
     if (s.mode === 'catalog') await categories(); await refresh(); if (cartFailure) cartError(cartFailure); else refreshCartPlan();
   }
@@ -320,7 +320,7 @@
     const motion = flying.animate([{ transform: 'translate(0,0) scale(1)', opacity: 1 }, { transform: 'translate(' + dx * .5 + 'px,' + (dy - 45) + 'px) scale(.8)', opacity: .9, offset: .55 }, { transform: 'translate(' + dx + 'px,' + dy + 'px) scale(.25)', opacity: 0 }], { duration: 640, easing: 'cubic-bezier(.3,.1,.2,1)', fill: 'forwards' }); motion.finished.catch(() => {}).finally(() => flying.remove());
     el('cart-count').animate([{ scale: 1 }, { scale: 1.35, offset: .65 }, { scale: 1 }], { duration: 850 });
   }
-  window.addEventListener('veyra:content-open', event => open(event.detail.id).catch(failure => error(failure.message)));
+  window.addEventListener('veyra:content-open', event => open(event.detail.id, event.detail.kind).catch(failure => error(failure.message)));
   api.onEvent(event => {
     if (event.type === 'state') { s.data = event.state; if (el('content-dialog').open) { renderHeader(); if (!build()) el('content-dialog').close(); } }
     if (event.type === 'progress' && s.data?.operation?.type === 'content' && s.data.operation.instanceId === s.id) renderProgress(event);

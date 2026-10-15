@@ -1,9 +1,5 @@
-const {
-  getLoaderArtifactListFor,
-  installFabric,
-  installForgeTask,
-  installNeoForgedTask,
-} = require('@xmcl/installer');
+// @xmcl/installer загружается ~0,2 с, поэтому подключается при первой установке, а не при запуске лаунчера.
+const installer = () => require('@xmcl/installer');
 
 const FORGE_METADATA = 'https://files.minecraftforge.net/net/minecraftforge/forge/maven-metadata.json';
 const FORGE_PROMOTIONS = 'https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json';
@@ -37,7 +33,7 @@ async function fetchLoaderVersions(loader, minecraftVersion) {
   try {
     let items;
     if (loader === 'fabric') {
-      const artifacts = await getLoaderArtifactListFor(minecraftVersion);
+      const artifacts = await installer().getLoaderArtifactListFor(minecraftVersion);
       items = artifacts.map((artifact) => ({
         id: artifact.loader.version,
         stable: Boolean(artifact.loader.stable),
@@ -86,7 +82,7 @@ async function installLoader(instance, javaPath, runTask, processOptions = {}) {
   if (!validVersion(instance.loaderVersion)) throw new Error('Выберите версию загрузчика');
   const directory = instance.directory;
   if (instance.loader === 'fabric') {
-    return installFabric({
+    return installer().installFabric({
       minecraftVersion: instance.minecraftVersion,
       version: instance.loaderVersion,
       minecraft: directory,
@@ -95,7 +91,7 @@ async function installLoader(instance, javaPath, runTask, processOptions = {}) {
   }
   if (instance.loader === 'forge') {
     const full = instance.minecraftVersion + '-' + instance.loaderVersion;
-    const task = installForgeTask({
+    const task = installer().installForgeTask({
       mcversion: instance.minecraftVersion,
       version: instance.loaderVersion,
       installer: {
@@ -110,7 +106,7 @@ async function installLoader(instance, javaPath, runTask, processOptions = {}) {
     return runTask(task);
   }
   if (instance.loader === 'neoforge') {
-    const task = installNeoForgedTask('neoforge', instance.loaderVersion, directory, {
+    const task = installer().installNeoForgedTask('neoforge', instance.loaderVersion, directory, {
       ...processOptions,
       side: 'client',
       java: javaPath,

@@ -1,5 +1,5 @@
 const { createHash } = require('node:crypto');
-const { spawnSync } = require('node:child_process');
+const { execFile, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
@@ -14,6 +14,13 @@ const COMPONENT_BY_MAJOR = {
   25: 'java-runtime-epsilon',
 };
 
+function parseJava(executable, output) {
+  const match = /(?:version\s+|openjdk\s+|java\s+)["']?(\d+)(?:\.(\d+))?/i.exec(output);
+  if (!match) return null;
+  const major = Number(match[1]) === 1 ? Number(match[2]) : Number(match[1]);
+  if (!Number.isInteger(major)) return null;
+  return { path: executable, major, description: output.split(/\r?\n/)[0].trim() };
+}
 function javaInfo(executable) {
   const result = spawnSync(executable, ['-version'], {
     encoding: 'utf8',
@@ -21,13 +28,19 @@ function javaInfo(executable) {
     windowsHide: true,
   });
   if (result.error || result.status !== 0) return null;
-  const output = String(result.stderr || '') + '\n' + String(result.stdout || '');
-  const match = /(?:version\s+|openjdk\s+|java\s+)["']?(\d+)(?:\.(\d+))?/i.exec(output);
-  if (!match) return null;
-  const major = Number(match[1]) === 1 ? Number(match[2]) : Number(match[1]);
-  if (!Number.isInteger(major)) return null;
-  return { path: executable, major, description: output.split(/\r?\n/)[0].trim() };
+  return parseJava(executable, String(result.stderr || '') + '\n' + String(result.stdout || ''));
 }
+// Та же проверка без блокировки главного процесса: окно продолжает отвечать, пока Java запускается.
+function probeJava(executable) {
+  return new Promise((resolve) => {
+    execFile(executable, ['-version'], { encoding: 'utf8', timeout: 10000, windowsHide: true }, (error, stdout, stderr) => {
+      resolve(error ? null : parseJava(executable, String(stderr || '') + '\n' + String(stdout || '')));
+    });
+  });
+}
+const whereJava = () => new Promise((resolve) => {
+  execFile('where.exe', ['java'], { encoding: 'utf8', timeout: 5000, windowsHide: true }, (error, stdout) => resolve(error ? '' : String(stdout)));
+});
 
 function requiredJava(version) {
   const major = Number(version.javaVersion?.majorVersion) || 8;
@@ -37,7 +50,13 @@ function requiredJava(version) {
   };
 }
 
-async function scanJava(userData, extraPaths = []) {
+// Одновременные запросы поиска получают один и тот же результат, а не запускают Java повторно.
+let scanning = null;
+function scanJava(userData, extraPaths = []) {
+  scanning ||= findJava(userData, extraPaths).finally(() => { scanning = null; });
+  return scanning;
+}
+async function findJava(userData, extraPaths) {
   const candidates = [];
   const add = (value) => {
     if (typeof value === 'string' && value.trim()) candidates.push(value.trim());
@@ -47,8 +66,7 @@ async function scanJava(userData, extraPaths = []) {
     add(path.join(process.env.JAVA_HOME, 'bin', 'javaw.exe'));
     add(path.join(process.env.JAVA_HOME, 'bin', 'java.exe'));
   }
-  const where = spawnSync('where.exe', ['java'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
-  if (where.status === 0) for (const line of String(where.stdout).split(/\r?\n/)) add(line);
+  for (const line of (await whereJava()).split(/\r?\n/)) add(line);
   for (const root of [process.env.ProgramFiles, process.env['ProgramFiles(x86)']]) {
     if (!root) continue;
     for (const group of ['Java', 'Eclipse Adoptium', 'Microsoft', 'Zulu', 'Amazon Corretto']) {
@@ -73,14 +91,15 @@ async function scanJava(userData, extraPaths = []) {
     } catch {}
   }
   const seen = new Set();
-  const result = [];
+  const unique = [];
   for (const candidate of candidates) {
     const key = path.resolve(candidate).toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    const info = javaInfo(candidate);
-    if (info) result.push(info);
+    unique.push(candidate);
   }
+  // Найденные Java проверяются параллельно: порядок списка сохраняется, время — как у самой медленной.
+  const result = (await Promise.all(unique.map(probeJava))).filter(Boolean);
   return result.sort((a, b) => b.major - a.major);
 }
 

@@ -22,7 +22,7 @@ async function main() {
     assert.equal(await page.locator('#greeting-name').textContent(), 'LaiseyMorn');
     assert.match(await page.locator('#greeting-time').textContent(), /Доброе утро|Добрый день|Добрый вечер|Доброй ночи/);
     assert.equal(await page.locator('#capsule-playtime').textContent(), '1 ч 31 мин');
-    assert.equal(await page.locator('body').evaluate(node => getComputedStyle(node).backgroundColor), 'rgb(8, 9, 17)');
+    assert.equal(await page.locator('body').evaluate(node => getComputedStyle(node).backgroundColor), 'rgb(32, 27, 34)');
     for (const selector of ['.wordmark', '.page-heading', '#hero-name', '#home-count']) assert.equal(await page.locator(selector).first().evaluate(node => getComputedStyle(node).userSelect), 'none');
     assert.equal(await page.locator('#search-input').evaluate(node => getComputedStyle(node).userSelect), 'text');
     assert.equal(await page.locator('#logs-content').evaluate(node => getComputedStyle(node).userSelect), 'text');
@@ -51,7 +51,8 @@ async function main() {
     await page.locator('#create-top').click();
     await page.waitForTimeout(750);
     const box = await page.locator('#create-dialog').boundingBox();
-    assert.ok(box.x > 200, 'Creation panel must enter from the right');
+    const viewport = await page.evaluate(() => innerWidth);
+    assert.ok(box.x > 200 && Math.abs(box.x + box.width / 2 - viewport / 2) < 2, 'The crafting window must open centred with room to click outside');
     await page.screenshot({ path: path.join(output, 'creation-sheet.png') });
     await page.mouse.click(110, 400);
     await page.waitForFunction(() => !document.getElementById('create-dialog').open);
@@ -69,7 +70,7 @@ async function main() {
     assert.equal(await page.locator('#appearance-transparency-value').textContent(), '40%');
     assert.equal((await page.evaluate(() => window.launcher.getState())).settings.appearance.transparency, 0, 'Preview must not save');
     await page.locator('.rail-button[data-view="home"]').click();
-    assert.equal(await page.locator('body').evaluate(node => getComputedStyle(node).backgroundColor), 'rgb(8, 9, 17)', 'Discard unsaved preview on leaving settings');
+    assert.equal(await page.locator('body').evaluate(node => getComputedStyle(node).backgroundColor), 'rgb(32, 27, 34)', 'Discard unsaved preview on leaving settings');
     await page.locator('.rail-button[data-view="settings"]').click();
     await page.locator('[data-atmosphere="mist"]').click();
     await page.locator('#save-settings').click();
