@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { pipeline } = require('node:stream/promises');
+const { describeError } = require('./network');
 
 const RUNTIME_INDEX = 'https://launchermeta.mojang.com/v1/products/java-runtime/2ec0cc96c44e5a76b9c8b7c39df7210883d12871/all.json';
 const COMPONENT_BY_MAJOR = {
@@ -147,7 +148,7 @@ async function downloadFile(entry, destination, signal) {
       await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
     }
   }
-  throw new Error('Не удалось загрузить Java: ' + (lastError?.message || lastError));
+  throw new Error('Не удалось загрузить Java: ' + describeError(lastError));
 }
 
 async function installManagedJava(component, major, userData, onProgress, signal) {

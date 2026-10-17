@@ -19,7 +19,7 @@ async function fabricSide(file) {
   finally { zip.close(); }
 }
 class ServerManager {
-  constructor({ fetch: fetcher = (...args) => fetch(...args), spawn = (...args) => require('node:child_process').spawn(...args), onChange = () => {}, port = 25565, version = '0.9.0' } = {}) { this.fetch = fetcher; this.spawn = spawn; this.onChange = onChange; this.port = port; this.agent = 'VeyraLauncher/' + version; this.run = null; this.state = null; this.partial = ''; }
+  constructor({ fetch: fetcher = (...args) => fetch(...args), spawn = (...args) => require('node:child_process').spawn(...args), onChange = () => {}, port = 25565, version = '0.9.1' } = {}) { this.fetch = fetcher; this.spawn = spawn; this.onChange = onChange; this.port = port; this.agent = 'VeyraLauncher/' + version; this.run = null; this.state = null; this.partial = ''; }
   update(patch = {}) { this.state = { ...this.state, ...patch }; this.onChange(); }
   output(bytes) { const text = String(bytes).replace(/\x1b\[[0-9;]*m/g, ''); this.state.lines = (this.state.lines + text).slice(-60000);
     if (this.state.status === 'starting' && /Done \([\d.,]+s\)!|For help, type "help"/.test(this.state.lines)) { this.state.status = 'ready'; this.state.readyAt = Date.now(); }

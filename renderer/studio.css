@@ -29,6 +29,7 @@
 .version-tile.is-selected small { color: var(--plum-800); }
 .version-tile.is-selected .icon { opacity: 1; }
 .version-empty { grid-column: 1 / -1; margin: 0; padding: 20px 0; color: var(--muted); font-size: 14px; }
+.version-empty .version-retry { display: flex; margin-top: 10px; }
 .version-more { margin-top: 10px; }
 .loader-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .loader-choice { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; padding: 12px 4px 11px; border: 0; background: var(--inset); color: var(--cream-dim); text-align: center; --hi: var(--inset-hi); --lo: var(--inset-lo); box-shadow: var(--frame-out), var(--frame-in); }

@@ -2,6 +2,7 @@ const { createHash } = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { MinecraftFolder, Version } = require('@xmcl/core');
+const { describeError } = require('./network');
 // @xmcl/installer загружается ~0,2 с, поэтому подключается при первой установке, а не при запуске лаунчера.
 const installer = () => require('@xmcl/installer');
 
@@ -45,7 +46,7 @@ async function assetObjects(version, folder, operation, progress) {
         await new Promise((resolve) => setTimeout(resolve, attempt * 700));
       }
     }
-    if (!bytes) throw new Error('Не удалось получить индекс ресурсов: ' + lastError?.message);
+    if (!bytes) throw new Error('Не удалось получить индекс ресурсов: ' + describeError(lastError));
   }
   let data;
   try { data = JSON.parse(bytes.toString('utf8')); } catch { throw new Error('Индекс ресурсов повреждён'); }
@@ -73,7 +74,7 @@ async function installLibraries(version, directory, operation, runTask, progress
         await new Promise((resolve) => setTimeout(resolve, attempt * 600));
       }
     }
-    if (lastError) throw new Error('Не удалось загрузить библиотеки: ' + lastError.message);
+    if (lastError) throw new Error('Не удалось загрузить библиотеки: ' + describeError(lastError));
     progress({
       phase: 'Библиотеки',
       completed: Math.min(index + batch.length, libraries.length),
@@ -114,7 +115,7 @@ async function installAssets(version, directory, operation, runTask, progress) {
         await new Promise((resolve) => setTimeout(resolve, attempt * 700));
       }
     }
-    if (lastError) throw new Error('Не удалось загрузить ресурсы: ' + lastError.message);
+    if (lastError) throw new Error('Не удалось загрузить ресурсы: ' + describeError(lastError));
     completed += batchBytes;
     progress({
       phase: 'Ресурсы',

@@ -607,6 +607,21 @@
     const versions = state.data?.versions || [];
     return versions.filter((item) => state.data.settings.showSnapshots || item.type === 'release');
   }
+  // Каталог версий Minecraft: state.catalog — '' (получен или ещё не запрашивался), 'loading' или текст ошибки.
+  // Без каталога сборку не создать, поэтому окно создания показывает причину и даёт повторить.
+  async function loadCatalog() {
+    if (state.catalog === 'loading') return;
+    state.catalog = 'loading';
+    if (el('create-dialog').open) renderVersionTiles();
+    try {
+      await api.refreshVersions();
+      state.catalog = '';
+    } catch (error) {
+      // Уведомление о сбое присылает главный процесс, здесь причина только запоминается для окна создания.
+      state.catalog = friendlyError(error) || 'Неизвестная ошибка';
+    }
+    if (el('create-dialog').open) renderVersionTiles();
+  }
   function renderVersionOptions() {
     const select = el('create-version');
     const previous = select.value;
@@ -659,7 +674,17 @@
     if (!versions.length) {
       const hint = document.createElement('p');
       hint.className = 'version-empty';
-      hint.textContent = state.data.versions.length ? 'Версия не найдена. Попробуйте другой запрос.' : 'Загружаем каталог Minecraft…';
+      const failed = !state.data.versions.length && state.catalog && state.catalog !== 'loading';
+      hint.textContent = state.data.versions.length ? 'Версия не найдена. Попробуйте другой запрос.' : failed ? 'Каталог версий Minecraft не загрузился. ' + state.catalog : 'Загружаем каталог Minecraft…';
+      if (failed) {
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'text-button version-retry';
+        retry.id = 'version-retry';
+        retry.textContent = 'Повторить';
+        retry.addEventListener('click', loadCatalog);
+        hint.append(' ', retry);
+      }
       target.append(hint);
     }
     el('version-more').hidden = versions.length <= (state.versionLimit || 24);
@@ -1059,6 +1084,7 @@
     el('loader-version-field').hidden = true;
     showDialog(el('create-dialog'));
     el('create-name').focus();
+    if (!state.data.versions.length) loadCatalog();
   }
   function openEdit(item) {
     if (!item) return;
@@ -1736,7 +1762,7 @@
     showView('home');
     ready();
     // Java ищет главный процесс сразу после появления окна и присылает результат сам.
-    if (!data.versions.length) await action(() => api.refreshVersions());
+    if (!data.versions.length) await loadCatalog();
     setInterval(() => { renderGreeting(); renderPlaytime(); if (el('profile-dialog').open) renderVeyraWait(); }, 1000);
   }
   initialize();

@@ -29,6 +29,13 @@ const { Updater, MODES: UPDATE_MODES, newer, fileHash } = require('./updater');
 const updateConfig = require('./update-config.json');
 const { detectInstall, readInstallState, runSetup, cleanupInstall } = require('./install-mode');
 const microsoftConfig = require('./microsoft-config.json');
+const { trustSystemCertificates, describeError, readableError, readableFetch } = require('./network');
+
+// До первого соединения: загрузкам главного процесса нужны корневые сертификаты Windows,
+// а их сбоям — настоящая причина вместо «fetch failed».
+let certificateError = '';
+try { trustSystemCertificates(); } catch (error) { certificateError = error.message; }
+globalThis.fetch = readableFetch(globalThis.fetch);
 
 if (process.env.VEYRA_TEST_DATA_DIR) app.setPath('userData', path.resolve(process.env.VEYRA_TEST_DATA_DIR));
 const primaryLauncher = app.requestSingleInstanceLock();
@@ -145,12 +152,13 @@ function status(message, level = 'info') {
 }
 
 function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error || 'Неизвестная ошибка');
+  return error instanceof Error ? describeError(error) : String(error || 'Неизвестная ошибка');
 }
 
 function reportError(prefix, error) {
   const message = prefix + ': ' + errorMessage(error);
-  log(error?.stack || message);
+  const stack = typeof error?.stack === 'string' ? error.stack : '';
+  log(stack.includes(errorMessage(error)) ? stack : message + (stack ? '\n' + stack : ''));
   broadcast({ type: 'error', message });
   return message;
 }
@@ -881,9 +889,15 @@ async function createInstance(input) {
   }
   const id = randomUUID();
   const directory = path.join(instancesDir(), id);
-  await fs.mkdir(directory, { recursive: true });
-  await Promise.all(['mods', 'saves', 'resourcepacks', 'screenshots'].map((name) =>
-    fs.mkdir(path.join(directory, name), { recursive: true })));
+  try {
+    await fs.mkdir(directory, { recursive: true });
+    await Promise.all(['mods', 'saves', 'resourcepacks', 'screenshots'].map((name) =>
+      fs.mkdir(path.join(directory, name), { recursive: true })));
+  } catch (error) {
+    // «Контролируемый доступ к папкам» Защитника Windows и защита папок в антивирусах не пускают незнакомые программы в «Документы».
+    if (!['EPERM', 'EACCES'].includes(error?.code)) throw error;
+    throw new Error('Windows не разрешает лаунчеру создать папку сборки в ' + instancesDir() + ' (' + error.code + '). Если в Защитнике Windows включён «Контролируемый доступ к папкам» или в антивирусе — защита папок, разрешите в нём Veyra Launcher', { cause: error });
+  }
   const instance = sanitizeInstance({
     id,
     name: buildName(input.name, settings.instances),
@@ -1280,7 +1294,7 @@ async function installInstance(id) {
       return publicState();
     }
     reportError('Установка не завершена', error);
-    throw error;
+    throw readableError(error);
   } finally { endOperation(operation); }
 }
 
@@ -1932,6 +1946,7 @@ if (primaryLauncher) app.whenReady().then(async () => {
     } catch { return new Response('', { status: 404 }); }
   });
   await fs.mkdir(dataDir(), { recursive: true });
+  if (certificateError) log('Корневые сертификаты Windows не подключены: ' + certificateError);
   await loadState();
   if (await resumeUpdate().catch(error => { log('Обновление: ' + errorMessage(error)); return false; })) { app.exit(0); return; }
   const recovered = await Promise.allSettled(settings.instances.map(instance => content.recover(instance)));
