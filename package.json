@@ -1,6 +1,6 @@
 {
   "name": "veyra-launcher",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "private": true,
   "description": "Veyra Launcher — современный лаунчер Minecraft Java Edition для Windows",
   "main": "main/desktop.js",
@@ -16,6 +16,7 @@
     "check:skin3d": "node scripts/skin3d-check.js",
     "check:veyra": "node scripts/veyra-account-check.js",
     "check:network": "node scripts/network-check.js",
+    "check:modpacks": "node scripts/modpack-check.js",
     "compat": "node scripts/build-compat.js",
     "check:updates": "node scripts/update-check.js",
     "check:installer": "node scripts/installer-check.js",

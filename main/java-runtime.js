@@ -59,8 +59,10 @@ function scanJava(userData, extraPaths = []) {
 }
 async function findJava(userData, extraPaths) {
   const candidates = [];
+  // Oracle кладёт в PATH прокладку …\Oracle\Java\javapath\java.exe: она запускает настоящую Java дочерним процессом.
+  // Игра через неё не останавливается кнопкой — завершается только прокладка, поэтому её не берём (настоящая Java найдётся в Program Files).
   const add = (value) => {
-    if (typeof value === 'string' && value.trim()) candidates.push(value.trim());
+    if (typeof value === 'string' && value.trim() && !/[\\/]javapath[\\/][^\\/]+$/i.test(value.trim())) candidates.push(value.trim());
   };
   for (const value of extraPaths) add(value);
   if (process.env.JAVA_HOME) {

@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="./styles.css" />
   <link rel="stylesheet" href="./studio.css" />
   <link rel="stylesheet" href="./content.css" />
+  <link rel="stylesheet" href="./modpacks.css" />
   <link rel="stylesheet" href="./server.css" />
   <link rel="stylesheet" href="./halloween.css" />
 </head>
@@ -52,6 +53,7 @@
               <h2>Создайте первую<br />сборку</h2>
               <p>Выберите версию Minecraft и загрузчик: Vanilla, Fabric, NeoForge или Forge. Veyra подготовит отдельную папку и подходящую Java.</p>
               <button class="button button-primary create-control hero-create" type="button" id="create-empty"><span class="create-symbol"><svg class="icon"><use href="#i-plus"/></svg></span><span>Создать сборку</span><svg class="icon create-arrow"><use href="#i-arrow"/></svg></button>
+              <button class="text-button hero-packs" type="button" id="modpacks-empty"><svg class="icon"><use href="#i-layers"/></svg>или поставить готовую сборку модов</button>
             </div>
             <div class="hero-content" id="hero-active" hidden>
               <span class="hero-kicker"><svg class="icon"><use href="#i-spark"/></svg> ВЫБРАННАЯ СБОРКА</span>
@@ -243,7 +245,7 @@
     </main>
 
     <footer class="footerbar">
-      <div class="footer-left"><span class="footer-brand">veyra <b id="app-version">0.9.1</b></span><span class="community" role="group" aria-label="Сообщество Veyra"><button class="community-button is-telegram" type="button" data-community="telegram" aria-label="Telegram-канал Veyra" data-tip="Telegram-канал Veyra" data-tip-lore="Новости, обновления и ответы"><svg class="icon"><use href="#i-telegram"/></svg></button><button class="community-button is-discord" type="button" data-community="discord" aria-label="Discord-сервер Veyra" data-tip="Discord-сервер Veyra" data-tip-lore="Общение, помощь и друзья для игры"><svg class="icon"><use href="#i-discord"/></svg></button></span><span class="footer-status"><i></i><span id="footer-message">Готовим лаунчер…</span></span><div class="toast" id="toast" role="status" hidden><svg class="icon"><use href="#i-check"/></svg><span id="toast-text"></span><button type="button" id="toast-undo" hidden>Отменить</button></div></div>
+      <div class="footer-left"><span class="footer-brand">veyra <b id="app-version">0.10.0</b></span><span class="community" role="group" aria-label="Сообщество Veyra"><button class="community-button is-telegram" type="button" data-community="telegram" aria-label="Telegram-канал Veyra" data-tip="Telegram-канал Veyra" data-tip-lore="Новости, обновления и ответы"><svg class="icon"><use href="#i-telegram"/></svg></button><button class="community-button is-discord" type="button" data-community="discord" aria-label="Discord-сервер Veyra" data-tip="Discord-сервер Veyra" data-tip-lore="Общение, помощь и друзья для игры"><svg class="icon"><use href="#i-discord"/></svg></button></span><span class="footer-status"><i></i><span id="footer-message">Готовим лаунчер…</span></span><div class="toast" id="toast" role="status" hidden><svg class="icon"><use href="#i-check"/></svg><span id="toast-text"></span><button type="button" id="toast-undo" hidden>Отменить</button></div></div>
       <aside class="icon-rail" aria-label="Навигация">
         <div class="xp" id="xp" data-tip="Уровень игрока" data-tip-lore="Один уровень — один час в игре"><span class="xp-level" id="xp-level">0</span><div class="xp-track"><span id="xp-fill"></span></div><span class="xp-label" id="xp-label" hidden></span></div>
         <div class="hotbar">
@@ -323,7 +325,7 @@
 
   <dialog id="create-dialog" class="modal creation-sheet" aria-labelledby="creation-title"><form id="create-form">
     <div class="modal-head"><span class="eyebrow">ВЕРСТАК · НОВАЯ СБОРКА</span><button type="button" class="modal-close" data-close="create-dialog" aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div>
-    <div class="creation-heading"><span class="creation-orbit" aria-hidden="true"><svg class="icon"><use href="#i-grid"/></svg></span><div><h2 id="creation-title">Начало чего-то вашего<span>.</span></h2><p class="modal-intro">Сложите версию и загрузчик — на выходе получится сборка.</p></div></div>
+    <div class="creation-heading"><span class="creation-orbit" aria-hidden="true"><svg class="icon"><use href="#i-grid"/></svg></span><div><h2 id="creation-title">Начало чего-то вашего<span>.</span></h2><p class="modal-intro">Сложите версию и загрузчик — на выходе получится сборка.</p></div><button type="button" class="creation-packs" id="create-modpacks"><svg class="icon"><use href="#i-layers"/></svg><span><b>Готовые сборки модов</b><small>Modrinth · моды и настройки уже внутри</small></span><svg class="icon"><use href="#i-arrow"/></svg></button></div>
     <div class="creation-layout">
       <div class="creation-column">
         <label class="form-field"><span>01 / Название сборки</span><input id="create-name" type="text" minlength="2" maxlength="40" placeholder="Сборка" /><small id="create-name-hint">Можно оставить пустым — придумаем название.</small></label>
@@ -396,6 +398,24 @@
     </aside>
     <aside class="content-plan" id="content-plan" hidden aria-labelledby="content-plan-title"><div class="content-plan-head"><div><span class="eyebrow">ВЕРСИЯ И ЗАВИСИМОСТИ</span><h3 id="content-plan-title">Проверяем зависимости…</h3></div><button class="button-icon" type="button" id="content-plan-close" aria-label="Закрыть план установки"><svg class="icon"><use href="#i-close"/></svg></button></div><label class="content-preview-toggle switch-field"><input id="content-preview" type="checkbox" role="switch" /><span class="switch-track"></span><span>Включить Beta / Alpha</span></label><label class="form-field content-version-field"><span>Совместимая версия</span><select id="content-version"></select></label><p class="content-plan-error" id="content-plan-error" role="alert" hidden></p><div class="content-plan-entries" id="content-plan-entries"></div><p class="content-plan-explanation">Добавьте проект в корзину и продолжайте выбирать. Всё скачается одной пачкой, когда будете готовы.</p><div class="content-plan-bottom"><span id="content-plan-size"></span><button class="button button-primary" type="button" id="content-plan-install" disabled><svg class="icon"><use href="#i-bag"/></svg><span>В корзину</span></button></div></aside>
   </dialog>
+  <dialog id="modpack-dialog" class="modal content-workspace modpack-workspace" aria-labelledby="modpack-title">
+    <header class="content-head"><div class="content-heading"><span class="content-emblem modpack-emblem" aria-hidden="true"><svg class="icon"><use href="#i-layers"/></svg></span><div><h2 id="modpack-title">Сборки модов</h2><p>Готовые наборы с Modrinth. Каждая ставится отдельной сборкой со своими модами и настройками.</p></div></div><div class="content-head-actions"><button type="button" class="modal-close" data-close="modpack-dialog" aria-label="Закрыть каталог сборок"><svg class="icon"><use href="#i-close"/></svg></button></div></header>
+    <div class="content-layout"><section class="content-body">
+    <div class="content-tools"><label class="version-search content-search"><svg class="icon"><use href="#i-search"/></svg><input id="modpack-search" type="search" placeholder="Найти сборку на Modrinth…" aria-label="Поиск сборок модов" /></label><select id="modpack-loader" aria-label="Загрузчик"><option value="">Все загрузчики</option><option value="fabric">Fabric</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option></select><select id="modpack-game" aria-label="Версия Minecraft"><option value="">Любой Minecraft</option></select><select id="modpack-sort" aria-label="Сортировка сборок"><option value="downloads">Популярные</option><option value="relevance">По запросу</option><option value="updated">Недавно обновлённые</option><option value="newest">Новые сборки</option></select><button class="button-icon" type="button" id="modpack-refresh" title="Обновить" aria-label="Обновить каталог сборок"><svg class="icon"><use href="#i-refresh"/></svg></button></div>
+    <p class="content-error" id="modpack-error" role="alert" hidden></p>
+    <div class="content-results is-catalog modpack-results" id="modpack-results" aria-label="Сборки модов"></div><div class="content-pagination" id="modpack-pagination" hidden><button class="text-button" type="button" id="modpack-previous">Назад</button><span id="modpack-page"></span><button class="text-button" type="button" id="modpack-next">Дальше <svg class="icon"><use href="#i-arrow"/></svg></button></div>
+    <footer class="content-bottom"><span id="modpack-count">Каталог Modrinth</span><span class="modpack-source"><span class="modrinth-dot"></span>Fabric · Forge · NeoForge</span></footer>
+    </section></div>
+    <aside class="content-plan modpack-plan" id="modpack-plan" hidden aria-labelledby="modpack-plan-title"><div class="content-plan-head"><div><span class="eyebrow">НОВАЯ СБОРКА ИЗ MODRINTH</span><h3 id="modpack-plan-title">Загружаем сведения…</h3></div><button class="button-icon" type="button" id="modpack-plan-close" aria-label="Закрыть сведения о сборке"><svg class="icon"><use href="#i-close"/></svg></button></div>
+      <div class="modpack-plan-scroll"><div class="modpack-art" id="modpack-art"></div><p class="modpack-description" id="modpack-description"></p>
+      <label class="content-preview-toggle switch-field"><input id="modpack-preview" type="checkbox" role="switch" /><span class="switch-track"></span><span>Показать Beta / Alpha</span></label>
+      <label class="form-field content-version-field"><span>Версия сборки</span><select id="modpack-version" disabled></select></label>
+      <dl class="modpack-facts" id="modpack-facts"></dl>
+      <label class="form-field modpack-name-field"><span>Название в Veyra</span><input id="modpack-name" type="text" maxlength="40" /><small>Можно оставить как есть.</small></label>
+      <p class="content-plan-error" id="modpack-plan-error" role="alert" hidden></p>
+      <p class="content-plan-explanation">Моды, настройки, Minecraft, загрузчик и Java скачаются при установке. Ход установки виден на главной, её можно отменить и продолжить.</p></div>
+      <div class="content-plan-bottom"><button class="text-button" type="button" id="modpack-page-link">На Modrinth <svg class="icon"><use href="#i-arrow"/></svg></button><button class="button button-primary" type="button" id="modpack-install" disabled><svg class="icon"><use href="#i-download"/></svg><span>Установить сборку</span></button></div></aside>
+  </dialog>
   <dialog id="save-rename-dialog" class="modal modal-small"><form id="save-rename-form"><div class="modal-head"><h2>Название папки сохранения</h2><button type="button" class="modal-close" data-close="save-rename-dialog" aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></div><label class="form-field"><span>Новое название</span><input id="save-rename-input" type="text" maxlength="140" required /></label><p class="profile-hint">Имя внутри Minecraft остаётся прежним; здесь меняется папка сохранения.</p><div class="modal-actions"><button class="button button-primary" type="submit">Сохранить</button></div></form></dialog>
 
   <dialog id="snake-dialog" class="modal snake-modal" aria-labelledby="snake-title">
@@ -410,6 +430,7 @@
   <script src="./skin3d.js"></script>
   <script src="./renderer.js"></script>
   <script src="./content.js"></script>
+  <script src="./modpacks.js"></script>
   <script src="./server.js"></script>
   <script src="./extras.js"></script>
   <script src="./eggs.js"></script>

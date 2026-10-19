@@ -239,9 +239,14 @@
     el('hero-loader').querySelector('span').textContent = loaderLabel(item);
     el('hero-loader').title = loaderLabel(item);
     el('hero-version').querySelector('span').textContent = 'Minecraft ' + item.minecraftVersion;
-    setText('hero-description', item.installed
-      ? 'Сборка готова. Моды, сохранения и настройки останутся внутри этой сборки.'
-      : 'Сборка создана. Установите игру, чтобы начать.');
+    const pack = item.modpack ? '«' + item.modpack.title + '» ' + item.modpack.version + ' с Modrinth' : '';
+    setText('hero-description', pack
+      ? (item.installed ? 'Сборка модов ' + pack + ' готова. Моды и настройки сборки живут в её папке.'
+        : item.modpack.state === 'pending' ? 'Сборка модов ' + pack + '. Нажмите «Установить»: моды, настройки, Minecraft и Java скачаются сами.'
+        : 'Моды сборки ' + pack + ' на месте. Установите игру, чтобы начать.')
+      : item.installed
+        ? 'Сборка готова. Моды, сохранения и настройки останутся внутри этой сборки.'
+        : 'Сборка создана. Установите игру, чтобы начать.');
     setText('detail-java', item.javaPath || state.data.settings.javaPath ? 'Своя' : 'Авто');
     setText('detail-memory', (item.memoryGb || state.data.settings.memoryGb) + ' ГБ');
     setText('detail-folder', item.legacy ? 'Старая' : 'Своя');
@@ -997,7 +1002,7 @@
       ['folder', 'Открыть папку', () => api.openInstanceFolder(id)],
       ['settings', 'Настройки сборки', () => openEdit(item)],
       ['trash', 'Удалить сборку', () => { state.removingId = id; showDialog(el('remove-dialog')); }, Boolean(state.data.operation?.instanceId === id || state.data.runningInstanceId === id)],
-    ] : [['plus', 'Новая сборка', openCreate], ['folder', 'Папка сборок', () => api.openDataFolder()]]);
+    ] : [['plus', 'Новая сборка', openCreate], ['layers', 'Сборки модов', openModpacks], ['folder', 'Папка сборок', () => api.openDataFolder()]]);
   }
   // Общее меню по правой кнопке: заголовок и пункты [иконка, подпись, действие, недоступен].
   function showMenu(event, title, entries) {
@@ -1085,6 +1090,11 @@
     showDialog(el('create-dialog'));
     el('create-name').focus();
     if (!state.data.versions.length) loadCatalog();
+  }
+  // Каталог сборок модов живёт в modpacks.js; окно новой сборки уступает ему место.
+  function openModpacks() {
+    closeDialog(el('create-dialog'));
+    window.dispatchEvent(new CustomEvent('veyra:modpacks-open'));
   }
   function openEdit(item) {
     if (!item) return;
@@ -1306,6 +1316,12 @@
       button.addEventListener('click', () => showView(button.dataset.view));
     }
     for (const id of ['create-top', 'create-empty']) el(id).addEventListener('click', openCreate);
+    for (const id of ['create-modpacks', 'modpacks-empty']) el(id).addEventListener('click', openModpacks);
+    // Сборка модов создана в каталоге: установка идёт так же, как у новой обычной сборки.
+    window.addEventListener('veyra:install-new', (event) => {
+      showView('home');
+      action(() => api.installInstance(event.detail.id));
+    });
     for (const button of document.querySelectorAll('[data-close]')) {
       button.addEventListener('click', () => closeDialog(el(button.dataset.close)));
     }

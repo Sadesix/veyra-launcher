@@ -17,7 +17,8 @@ const { prechecks, javaArguments } = require('./launch-runtime');
 const { appearance } = require('./appearance');
 const { validPlayerName } = require('./local-profile');
 const { observeOutput, cleanOutput } = require('./install-output');
-const { ContentManager, KINDS } = require('./content-manager');
+const { ContentManager, KINDS, safeIcon } = require('./content-manager');
+const { ModpackCatalog, inspectPack, applyPack, packRecord } = require('./modpacks');
 const { backgrounds, validBackground, randomBackground } = require('./backgrounds');
 const { DiscordPresence } = require('./discord-presence');
 const { CartStore } = require('./cart-store');
@@ -86,6 +87,7 @@ let revokeQueue = Promise.resolve();
 const veyraSecrets = new Set();
 const veyra = new VeyraAccount({ root: apiRoot(), version: app.getVersion() });
 const content = new ContentManager({ version: app.getVersion() });
+const modpacks = new ModpackCatalog({ version: app.getVersion() });
 const carts = new CartStore(path.join(app.getPath('userData'), 'content-carts.json'));
 let savedWindow = {};
 let windowSaveQueue = Promise.resolve();
@@ -240,6 +242,7 @@ function sanitizeInstance(raw) {
     serverConfig: raw.serverConfig && typeof raw.serverConfig === 'object' ? serverConfig(raw.serverConfig, { maxMemoryGb: maxMemoryGb() }) : null,
     favoriteShots: Array.isArray(raw.favoriteShots) ? raw.favoriteShots.filter(validShotName).slice(-200) : [],
     legacy: Boolean(raw.legacy),
+    modpack: packRecord(raw.modpack),
     installed: false,
   };
 }
@@ -869,6 +872,102 @@ async function refreshVersions() {
   return refreshPromise;
 }
 
+async function instanceFolder(id) {
+  const directory = path.join(instancesDir(), id);
+  try {
+    await fs.mkdir(directory, { recursive: true });
+    await Promise.all(['mods', 'saves', 'resourcepacks', 'screenshots'].map((name) =>
+      fs.mkdir(path.join(directory, name), { recursive: true })));
+  } catch (error) {
+    // «Контролируемый доступ к папкам» Защитника Windows и защита папок в антивирусах не пускают незнакомые программы в «Документы».
+    if (!['EPERM', 'EACCES'].includes(error?.code)) throw error;
+    throw new Error('Windows не разрешает лаунчеру создать папку сборки в ' + instancesDir() + ' (' + error.code + '). Если в Защитнике Windows включён «Контролируемый доступ к папкам» или в антивирусе — защита папок, разрешите в нём Veyra Launcher', { cause: error });
+  }
+  return directory;
+}
+
+// Название сборки модов: её заголовок с Modrinth, при совпадении — с номером.
+function packName(title) {
+  let base = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 40).trim();
+  if (base.length < 2) base = 'Сборка модов';
+  const used = new Set(settings.instances.map(item => item.name.toLocaleLowerCase('ru')));
+  let name = base, number = 1;
+  while (used.has(name.toLocaleLowerCase('ru'))) { const suffix = ' ' + ++number; name = base.slice(0, 40 - suffix.length).trim() + suffix; }
+  return name;
+}
+
+// Сборка модов с Modrinth становится отдельной сборкой Veyra. Её файлы скачиваются при установке:
+// прогресс, отмена и повтор те же, что у обычной сборки.
+async function createModpackInstance(input) {
+  if (activeOperation) throw new Error('Дождитесь окончания установки');
+  if (!input || typeof input !== 'object') throw new Error('Не удалось прочитать параметры сборки');
+  const custom = typeof input.name === 'string' && input.name.trim() ? buildName(input.name, settings.instances) : '';
+  const { project, version, file, loader, minecraft, image } = await modpacks.resolve(input.projectId, input.versionId);
+  const id = randomUUID();
+  const directory = await instanceFolder(id);
+  const instance = sanitizeInstance({
+    id,
+    name: custom || packName(project.title),
+    minecraftVersion: minecraft,
+    loader,
+    loaderVersion: '',
+    directory,
+    createdAt: new Date().toISOString(),
+    accent: 'violet',
+    backgroundId: randomBackground(),
+    note: String(project.description || '').replace(/\s+/g, ' ').trim().slice(0, 180),
+    modpack: { source: 'modrinth', projectId: project.id, versionId: version.id, slug: project.slug, title: project.title, version: version.version_number, icon: project.icon_url, state: 'pending', file },
+  });
+  if (!instance?.modpack) throw new Error('Modrinth вернул неполные сведения о сборке');
+  // Обложка — картинка из галереи сборки; без неё остаётся случайный фон.
+  if (image) {
+    const picture = path.join(directory, 'cover.download-' + randomUUID());
+    try { if (await modpacks.fetchImage(image, picture)) await applyCover(instance, picture, { quiet: true }); }
+    catch (error) { log('Обложка сборки модов: ' + errorMessage(error)); }
+    finally { await fs.rm(picture, { force: true }).catch(() => {}); }
+  }
+  settings.instances.unshift(instance);
+  settings.selectedInstanceId = id;
+  await persist();
+  emitState();
+  status('Сборка «' + instance.name + '» создана из Modrinth', 'success');
+  return { ...instance };
+}
+
+// Файлы сборки модов: .mrpack, моды из его списка и настройки из overrides. Версии Minecraft и загрузчика
+// берутся из самой сборки. Повторная установка докачивает только то, чего нет или что не сошлось по хешу.
+async function installModpack(instance, operation) {
+  const pack = instance.modpack;
+  const folder = path.join(instance.directory, '.veyra-modpack');
+  await fs.mkdir(folder, { recursive: true });
+  const file = path.join(folder, 'pack.mrpack');
+  const label = 'Скачиваем «' + pack.title + '» ' + pack.version;
+  if (!await fs.stat(file).then(stat => stat.size === pack.file.size, () => false)) {
+    let received = 0;
+    progress({ phase: 'Сборка модов', completed: 0, total: pack.file.size, message: label }, true);
+    await fs.rm(file, { force: true });
+    await modpacks.fetchPack(pack.file, file, operation.signal, bytes => { received += bytes; progress({ phase: 'Сборка модов', completed: received, total: pack.file.size, message: label }); });
+  }
+  let index;
+  try { index = await inspectPack(file); }
+  catch (error) { await fs.rm(file, { force: true }); throw error; }
+  log('Сборка модов «' + pack.title + '» ' + pack.version + ': Minecraft ' + index.minecraft + ', ' + index.loader + (index.loaderVersion ? ' ' + index.loaderVersion : '') + ', файлов: ' + index.files.length);
+  if (!manifest.versions.some(item => item.id === index.minecraft)) await refreshVersions().catch(() => {});
+  if (!manifest.versions.some(item => item.id === index.minecraft)) throw new Error('Minecraft ' + index.minecraft + ' нет в списке версий. Обновите список и повторите установку');
+  Object.assign(instance, { minecraftVersion: index.minecraft, loader: index.loader, loaderVersion: index.loaderVersion });
+  await persist();
+  emitState();
+  const result = await applyPack(file, index, instance.directory, { agent: 'VeyraLauncher/' + app.getVersion(), signal: operation.signal, progress: value => progress(value) });
+  operation.signal.throwIfAborted();
+  try { log('Сборка модов: на Modrinth найдено ' + await modpacks.registerContent(content, instance, index, { safeIcon }) + ' файлов из ' + index.files.length); }
+  catch (error) { log('Сборка модов: моды не сопоставлены с Modrinth — ' + errorMessage(error)); }
+  await fs.rm(file, { force: true });
+  instance.modpack = packRecord({ ...pack, state: 'applied', appliedAt: new Date().toISOString() });
+  await persist();
+  emitState();
+  log('Сборка модов «' + pack.title + '» распакована: файлов ' + result.files + ', настроек ' + result.overrides);
+}
+
 async function createInstance(input) {
   if (activeOperation) throw new Error('Дождитесь окончания установки');
   if (!input || typeof input !== 'object') throw new Error('Не удалось прочитать параметры сборки');
@@ -888,16 +987,7 @@ async function createInstance(input) {
     }
   }
   const id = randomUUID();
-  const directory = path.join(instancesDir(), id);
-  try {
-    await fs.mkdir(directory, { recursive: true });
-    await Promise.all(['mods', 'saves', 'resourcepacks', 'screenshots'].map((name) =>
-      fs.mkdir(path.join(directory, name), { recursive: true })));
-  } catch (error) {
-    // «Контролируемый доступ к папкам» Защитника Windows и защита папок в антивирусах не пускают незнакомые программы в «Документы».
-    if (!['EPERM', 'EACCES'].includes(error?.code)) throw error;
-    throw new Error('Windows не разрешает лаунчеру создать папку сборки в ' + instancesDir() + ' (' + error.code + '). Если в Защитнике Windows включён «Контролируемый доступ к папкам» или в антивирусе — защита папок, разрешите в нём Veyra Launcher', { cause: error });
-  }
+  const directory = await instanceFolder(id);
   const instance = sanitizeInstance({
     id,
     name: buildName(input.name, settings.instances),
@@ -977,7 +1067,8 @@ async function setInstanceCover(id) {
   return applyCover(instance, result.filePaths[0]);
 }
 
-async function applyCover(instance, source) {
+// quiet: обложка новой сборки, которой ещё нет в списке, — без сохранения настроек и уведомления.
+async function applyCover(instance, source, { quiet = false } = {}) {
   const stat = await fs.stat(source);
   if (!stat.isFile() || stat.size > 15 * 1024 * 1024) throw new Error('Обложка должна быть файлом до 15 МБ');
   const bytes = await fs.readFile(source);
@@ -997,6 +1088,7 @@ async function applyCover(instance, source) {
   }
   instance.coverFile = name;
   instance.coverRevision = Date.now();
+  if (quiet) return { ...instance };
   await persist();
   emitState();
   status('Обложка сборки обновлена', 'success');
@@ -1230,8 +1322,9 @@ async function fetchRequirements(metadata, signal) {
 
 async function installInstance(id) {
   const instance = requireInstance(id);
-  const metadata = manifest.versions.find((item) => item.id === instance.minecraftVersion);
-  if (!metadata) throw new Error('Версия Minecraft отсутствует в списке. Обновите его');
+  // Сборка модов сама задаёт версию Minecraft: её проверка — после распаковки.
+  const pending = instance.modpack?.state === 'pending';
+  if (!pending && !manifest.versions.some((item) => item.id === instance.minecraftVersion)) throw new Error('Версия Minecraft отсутствует в списке. Обновите его');
   const operation = beginOperation('install', id);
   instance.installed = false;
   emitState();
@@ -1241,6 +1334,9 @@ async function installInstance(id) {
     if (!instance.legacy) {
       await fs.rm(path.join(instance.directory, '.veyra-instance-ready.json'), { force: true });
     }
+    if (pending) await installModpack(instance, operation);
+    const metadata = manifest.versions.find((item) => item.id === instance.minecraftVersion);
+    if (!metadata) throw new Error('Версия Minecraft отсутствует в списке. Обновите его');
     const requirements = await fetchRequirements(metadata, operation.signal);
     const java = await resolveJava(
       { javaVersion: { majorVersion: requirements.major, component: requirements.component } },
@@ -1717,6 +1813,9 @@ function registerIpc() {
   ipcMain.handle('launcher:refresh-versions', () => refreshVersions());
   ipcMain.handle('launcher:get-loader-versions', (_event, loader, mc) => fetchLoaderVersions(loader, mc));
   ipcMain.handle('launcher:create-instance', (_event, input) => createInstance(input));
+  ipcMain.handle('launcher:search-modpacks', (_event, options) => modpacks.search(options && typeof options === 'object' ? options : {}));
+  ipcMain.handle('launcher:modpack-details', (_event, projectId) => modpacks.details(projectId));
+  ipcMain.handle('launcher:create-modpack-instance', (_event, input) => createModpackInstance(input));
   ipcMain.handle('launcher:select-instance', (_event, id) => selectInstance(id));
   ipcMain.handle('launcher:update-instance', (_event, id, patch) => updateInstance(id, patch));
   ipcMain.handle('launcher:set-instance-cover', (_event, id) => setInstanceCover(id));

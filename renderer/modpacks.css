@@ -1,0 +1,46 @@
+/* Каталог сборок модов Modrinth. Основа — окно мастерской (content.css). */
+.modpack-emblem { display: grid; place-items: center; background: var(--peach); color: var(--plum-950); }
+.modpack-emblem .icon { width: 21px; height: 21px; }
+.modpack-workspace .content-body { padding-top: 18px; }
+.modpack-results .content-empty { min-height: 320px; }
+/* У сетки каталога задана высота: без этого ряд берёт минимум карточки (213px), а не её содержимое. */
+.modpack-results { grid-auto-rows: max-content; }
+
+.modpack-card { padding-top: 0; }
+/* Баннер добавляет высоту: описание и низ карточки не сжимаются, карточка растёт сама. */
+.modpack-card > * { flex-shrink: 0; }
+.modpack-banner { height: 96px; margin: 0 -16px 14px; flex: none; background: var(--plum-900) center / cover no-repeat; box-shadow: inset 0 -3px 0 var(--plum-950); }
+.modpack-banner.is-empty { background: linear-gradient(135deg, var(--plum-600), var(--plum-900)); }
+.modpack-card .catalog-card-head { margin-top: -30px; align-items: flex-start; }
+.modpack-card .catalog-card-head .content-art { width: 48px; height: 48px; background: var(--plum-900); box-shadow: 0 0 0 3px var(--plum-950), 0 0 0 6px var(--plum-600); }
+.modpack-card .catalog-card-head > div { margin-top: 33px; }
+.modpack-card > p { -webkit-line-clamp: 2; margin-top: 12px; }
+.catalog-tags .modpack-loader { color: var(--sage-300); }
+.modpack-choose { min-height: 33px; padding: 0 12px; }
+
+.modpack-source { display: flex; align-items: center; color: var(--soft); font: 10px/1 var(--mc); word-spacing: -.3em; }
+
+.modpack-plan-scroll { flex: 1; min-height: 0; overflow-y: auto; margin-right: -9px; padding-right: 9px; }
+.modpack-art { aspect-ratio: 16 / 9; margin: 3px 3px 16px; background: var(--inset) center / cover no-repeat; box-shadow: 0 0 0 3px var(--plum-950); }
+.modpack-description { margin: 0 3px 18px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.modpack-facts { display: grid; grid-template-columns: auto 1fr; gap: 9px 15px; margin: 0 3px 18px; padding: 12px 14px; background: var(--plum-950); font-size: 12px; }
+.modpack-facts:empty { display: none; }
+.modpack-facts dt { color: var(--soft); }
+.modpack-facts dd { margin: 0; color: var(--cream-dim); overflow-wrap: anywhere; }
+.modpack-name-field { margin: 0 3px 4px; }
+.modpack-name-field small { display: block; margin-top: 7px; color: var(--soft); font-size: 12px; }
+.modpack-plan .content-plan-bottom .text-button .icon { width: 10px; height: 10px; }
+
+/* Переход из окна новой сборки и с пустой главной. */
+.creation-packs { display: flex; align-items: center; gap: 12px; margin-left: auto; min-height: 51px; padding: 0 15px 3px 12px; border: 0; background: var(--plum-800); color: var(--cream); text-align: left; cursor: pointer; --hi: var(--plum-600); --lo: var(--plum-950); box-shadow: var(--frame-out), var(--frame-in); }
+.creation-packs:hover { --line: var(--peach); }
+.creation-packs > .icon:first-child { width: 18px; height: 18px; color: var(--peach); }
+.creation-packs > .icon:last-child { width: 12px; height: 12px; color: var(--plum-300); }
+.creation-packs b { display: block; font: 12px/1.2 var(--mc); font-weight: 400; word-spacing: -.3em; }
+.creation-packs small { display: block; margin-top: 5px; color: var(--soft); font-size: 12px; }
+.hero-packs { margin-top: 15px; font-size: 12px; }
+
+@media (max-width: 900px) {
+  .creation-heading { flex-wrap: wrap; }
+  .creation-packs { margin-left: 0; width: 100%; }
+}

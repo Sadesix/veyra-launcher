@@ -425,4 +425,4 @@ class ContentManager {
     } finally { this.activeTransactions.delete(instance.id); }
   }
 }
-module.exports = { ContentManager, KINDS, safeName, compatible };
+module.exports = { ContentManager, KINDS, safeName, safeIcon, compatible };

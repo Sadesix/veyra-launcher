@@ -70,7 +70,7 @@ async function main() {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(980, 650));
     await page.locator('#content-cart-open').click();
     await page.waitForTimeout(600);
-    assert.equal(await page.locator('.content-body').evaluate(node => node.scrollWidth <= node.clientWidth + 1), true);
+    assert.equal(await page.locator('#content-dialog .content-body').evaluate(node => node.scrollWidth <= node.clientWidth + 1), true);
     assert.equal(await page.locator('#content-dialog').evaluate(node => node.scrollWidth <= node.clientWidth + 1), true);
     await page.screenshot({ path: path.join(output, 'cart-workshop-small.png') });
     const cross = page.locator('[data-close="content-dialog"]'); const rect = await cross.boundingBox(); assert.ok(rect.width >= 44 && rect.height >= 44);

@@ -96,7 +96,7 @@ async function main() {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(980, 650));
     await page.waitForTimeout(700);
     assert.equal(await page.locator('#content-dialog').evaluate(node => node.scrollWidth > node.clientWidth + 1), false, 'Content workspace must fit the minimum window');
-    assert.equal(await page.locator('.content-body').evaluate(node => node.scrollWidth > node.clientWidth + 1), false);
+    assert.equal(await page.locator('#content-dialog .content-body').evaluate(node => node.scrollWidth > node.clientWidth + 1), false);
     await page.screenshot({ path: path.join(output, 'content-small.png') });
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.getElementById('content-dialog').open);
