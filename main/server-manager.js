@@ -14,7 +14,7 @@ async function portFree(port) {
 }
 async function plain(directory) { await fs.mkdir(directory, { recursive: true }); if ((await fs.lstat(directory)).isSymbolicLink()) throw new Error('Папка сервера не должна быть ссылкой'); }
 async function fabricSide(file) {
-  const zip = await open(await fs.readFile(file), { lazyEntries: true, autoClose: false });
+  const zip = await open(file, { lazyEntries: true, autoClose: false });
   try { const entry = (await readAllEntries(zip)).find(item => item.fileName === 'fabric.mod.json'); if (!entry) return ''; let text = ''; for await (const bytes of await openEntryReadStream(zip, entry)) { text += bytes; if (text.length > 1024 * 1024) throw new Error('Большой манифест мода'); } const mod = JSON.parse(text); return mod.environment === 'client' ? 'unsupported' : ['*', 'server'].includes(mod.environment || '*') ? 'required' : ''; }
   finally { zip.close(); }
 }

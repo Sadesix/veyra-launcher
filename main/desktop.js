@@ -26,6 +26,9 @@ const { buildName } = require('./build-name');
 const { clientFolder, clientName, clientMarker, findClients, alive } = require('./client-sessions');
 const { ServerManager, portFree } = require('./server-manager');
 const { serverConfig, importProperties } = require('./server-config');
+const { VeyraController, endpoint } = require('./veyra-controller');
+const { inspectBuild, buildFiles } = require('./controller-build');
+const { inspectExport, exportBuild, inspectShare } = require('./build-share');
 const { Updater, MODES: UPDATE_MODES, newer, fileHash } = require('./updater');
 const updateConfig = require('./update-config.json');
 const { detectInstall, readInstallState, runSetup, cleanupInstall } = require('./install-mode');
@@ -94,6 +97,8 @@ let windowSaveQueue = Promise.resolve();
 let windowSaveTimer;
 const discord = new DiscordPresence({ onStatus: () => { if (settings) broadcast({ type: 'discord', status: discord.status }); } });
 const server = new ServerManager({ version: app.getVersion(), onChange: () => { if (settings) emitState(); } });
+let controller;
+let shareExport, shareImport;
 const WINDOW_COLOR = '#201b22';
 // Установленный лаунчер (app-<сборка> внутри папки установки) ставит обновления установщиком новой версии.
 // Прежние переносимые сборки сообщали путь к EXE: рядом с ним лежат и скачанные обновления.
@@ -243,6 +248,7 @@ function sanitizeInstance(raw) {
     favoriteShots: Array.isArray(raw.favoriteShots) ? raw.favoriteShots.filter(validShotName).slice(-200) : [],
     legacy: Boolean(raw.legacy),
     modpack: packRecord(raw.modpack),
+    sharePending: raw.sharePending === true,
     installed: false,
   };
 }
@@ -968,7 +974,7 @@ async function installModpack(instance, operation) {
   log('Сборка модов «' + pack.title + '» распакована: файлов ' + result.files + ', настроек ' + result.overrides);
 }
 
-async function createInstance(input) {
+async function createInstance(input, share) {
   if (activeOperation) throw new Error('Дождитесь окончания установки');
   if (!input || typeof input !== 'object') throw new Error('Не удалось прочитать параметры сборки');
   buildName(input.name, settings.instances);
@@ -988,6 +994,7 @@ async function createInstance(input) {
   }
   const id = randomUUID();
   const directory = await instanceFolder(id);
+  if (share) await fs.copyFile(share.file, path.join(directory, '.veyra-import.veyra'));
   const instance = sanitizeInstance({
     id,
     name: buildName(input.name, settings.instances),
@@ -998,6 +1005,8 @@ async function createInstance(input) {
     createdAt: new Date().toISOString(),
     accent: 'violet',
     backgroundId: randomBackground(),
+    sharePending: Boolean(share),
+    note: share?.note,
   });
   settings.instances.unshift(instance);
   settings.selectedInstanceId = id;
@@ -1324,6 +1333,7 @@ async function installInstance(id) {
   const instance = requireInstance(id);
   // Сборка модов сама задаёт версию Minecraft: её проверка — после распаковки.
   const pending = instance.modpack?.state === 'pending';
+  const shared = instance.sharePending;
   if (!pending && !manifest.versions.some((item) => item.id === instance.minecraftVersion)) throw new Error('Версия Minecraft отсутствует в списке. Обновите его');
   const operation = beginOperation('install', id);
   instance.installed = false;
@@ -1335,6 +1345,15 @@ async function installInstance(id) {
       await fs.rm(path.join(instance.directory, '.veyra-instance-ready.json'), { force: true });
     }
     if (pending) await installModpack(instance, operation);
+    if (shared) {
+      const file = path.join(instance.directory, '.veyra-import.veyra');
+      const { index } = await inspectShare(file);
+      if (index.minecraft !== instance.minecraftVersion || index.loader !== instance.loader || index.loaderVersion !== instance.loaderVersion) {
+        throw new Error('Версия Minecraft или загрузчика изменилась в файле .veyra');
+      }
+      await applyPack(file, index, instance.directory, { agent: 'VeyraLauncher/' + app.getVersion(), signal: operation.signal, progress });
+      await modpacks.registerContent(content, instance, index, { safeIcon }).catch(error => log('Импорт .veyra: ' + errorMessage(error)));
+    }
     const metadata = manifest.versions.find((item) => item.id === instance.minecraftVersion);
     if (!metadata) throw new Error('Версия Minecraft отсутствует в списке. Обновите его');
     const requirements = await fetchRequirements(metadata, operation.signal);
@@ -1376,7 +1395,9 @@ async function installInstance(id) {
         installedAt: new Date().toISOString(),
       });
     }
+    instance.sharePending = false;
     await persist();
+    if (shared) await fs.rm(path.join(instance.directory, '.veyra-import.veyra'), { force: true }).catch(() => {});
     emitState();
     status('Сборка «' + instance.name + '» готова', 'success');
     operation.outcome = 'success';
@@ -1407,9 +1428,10 @@ async function launchInstance(id, connect = false) {
   if (authController) throw new Error('Завершите Microsoft-вход или отмените его перед запуском');
   const operation = beginOperation('launch', id);
   try {
-    if (connect && (!server.run || server.state.status !== 'ready' || server.state.instanceId !== id)) throw new Error('Сначала запустите сервер этой сборки и дождитесь готовности');
+    if (connect === true && (!server.run || server.state.status !== 'ready' || server.state.instanceId !== id)) throw new Error('Сначала запустите сервер этой сборки и дождитесь готовности');
+    const target = connect === true ? { host: '127.0.0.1', port: server.state.port, veyraLogin: server.state.config?.veyraLogin } : connect;
     const mode = settings.accountMode;
-    if (connect && server.state.config?.veyraLogin && mode !== 'veyra') throw new Error('Сервер запущен со входом через Veyra: на него пускают только игроков с аккаунтом Veyra. Войдите в аккаунт в профиле и нажмите «Играть с этим аккаунтом»');
+    if (target?.veyraLogin && mode !== 'veyra') throw new Error('Сервер запущен со входом через Veyra: на него пускают только игроков с аккаунтом Veyra. Войдите в аккаунт в профиле и нажмите «Играть с этим аккаунтом»');
     await clientsReady;
     // Аккаунт Veyra играет только в одном клиенте: отказ сразу, а не после подготовки файлов и Java.
     if (mode === 'veyra' && veyraSession && playingAs(veyraSession.profile.id)) throw new Error('Аккаунт Veyra «' + veyraSession.profile.name + '» уже играет в другом клиенте. Для второго клиента выберите в профиле локальный ник');
@@ -1452,7 +1474,8 @@ async function launchInstance(id, connect = false) {
     const child = await launch({
       gamePath: directory,
       resourcePath: instance.directory,
-      ...(connect ? (/^1\.(?:[0-9]|1[0-9])(?:\.|$)/.test(instance.minecraftVersion) ? { server: { ip: '127.0.0.1', port: server.state.port } } : { quickPlayMultiplayer: '127.0.0.1:' + server.state.port }) : {}),
+      ...(target ? (/^1\.(?:[0-9]|1[0-9])(?:\.|$)/.test(instance.minecraftVersion) ?
+        { server: { ip: target.host, port: target.port } } : { quickPlayMultiplayer: endpoint(target.host, target.port) }) : {}),
       nativeRoot: path.join(directory, '.veyra-natives', runId),
       javaPath: java.path,
       version,
@@ -1834,6 +1857,104 @@ function registerIpc() {
   ipcMain.handle('launcher:get-server-config', async (_event, id) => effectiveServerConfig(requireInstance(id)));
   ipcMain.handle('launcher:save-server-config', (_event, id, value) => saveServerConfig(id, value));
   ipcMain.handle('launcher:send-server-command', (_event, text) => server.command(text));
+  ipcMain.handle('launcher:controller-list', () => controller.list());
+  ipcMain.handle('launcher:controller-key', async () => {
+    const result = await dialog.showOpenDialog(window, { title: 'Выберите приватный ключ SSH', properties: ['openFile'] });
+    return result.filePaths[0] || '';
+  });
+  ipcMain.handle('launcher:controller-connect', (_event, input, trust) => controller.connect(input, trust));
+  ipcMain.handle('launcher:controller-attach', (_event, id) => controller.attach(id));
+  ipcMain.handle('launcher:controller-close', (_event, id) => controller.close(id));
+  ipcMain.handle('launcher:controller-forget', (_event, id) => controller.forget(id));
+  ipcMain.handle('launcher:controller-snapshot', (_event, id, world) => controller.snapshot(id, world));
+  ipcMain.handle('launcher:controller-inspect-build', (_event, id) => {
+    const instance = requireInstance(id);
+    if (!instance.installed) throw new Error('Сначала установите сборку');
+    return inspectBuild(instance, project => content.cached('/project/' + encodeURIComponent(project)));
+  });
+  ipcMain.handle('launcher:controller-action', (_event, id, action, world, value) => {
+    if (action === 'create' && !manifest.versions.some(item => item.type === 'release' && item.id === value?.minecraftVersion)) {
+      throw new Error('Выбранного релиза нет в каталоге Minecraft. Обновите список версий.');
+    }
+    return controller.action(id, action, world, value);
+  });
+  ipcMain.handle('launcher:controller-import-build', async (_event, id, instanceId, options) => {
+    const instance = requireInstance(instanceId);
+    if (!instance.installed) throw new Error('Сначала установите сборку');
+    const operation = beginOperation('controller-transfer', instanceId);
+    operation.cancellable = true;
+    try {
+      await content.recover(instance);
+      const files = await buildFiles(instance, options?.mods, options?.saveName);
+      progress({ phase: 'Перенос сборки на ВМ', completed: 0, total: files.total }, true);
+      return await controller.importBuild(id, options, instance, files,
+        (completed, total) => progress({ phase: 'Перенос сборки на ВМ', completed, total }), operation.signal);
+    } finally { endOperation(operation); }
+  });
+  ipcMain.handle('launcher:controller-copy', async (_event, id, world) => {
+    clipboard.writeText((await controller.target(id, world)).address);
+  });
+  ipcMain.handle('launcher:controller-join', async (_event, id, world) => {
+    const target = await controller.target(id, world);
+    if (target.status !== 'ready') throw new Error('Сначала дождитесь запуска мира на ВМ');
+    const loader = target.loader || 'vanilla';
+    const matches = item => item?.installed && item.loader === loader && item.minecraftVersion === target.minecraftVersion &&
+      (loader === 'vanilla' || item.loaderVersion === target.loaderVersion);
+    const source = settings.instances.find(item => item.id === target.sourceId && matches(item));
+    const preferred = selectedInstance();
+    const instance = source || (matches(preferred) ? preferred : loader === 'vanilla' ? settings.instances.find(matches) : null);
+    if (!instance) throw new Error('Выберите во вкладке «Сборки» установленную сборку с теми же модами и версией Minecraft ' + target.minecraftVersion);
+    return launchInstance(instance.id, target);
+  });
+  ipcMain.handle('launcher:share-inspect-export', async (_event, id) => {
+    const instance = requireInstance(id);
+    if (!instance.installed) throw new Error('Сначала установите сборку');
+    const mods = await inspectExport(instance, hashes => modpacks.api('/version_files', {
+      method: 'POST', body: { hashes, algorithm: 'sha1' },
+    }));
+    const token = randomUUID();
+    shareExport = { token, id, mods };
+    return { token, name: instance.name, count: mods.length,
+      unresolved: mods.filter(mod => !mod.source).map(mod => ({ name: mod.name, version: mod.version })) };
+  });
+  ipcMain.handle('launcher:share-save', async (_event, token, includeMods) => {
+    const plan = shareExport;
+    if (!plan || plan.token !== token) throw new Error('Откройте окно экспорта снова');
+    const instance = requireInstance(plan.id);
+    const defaultName = instance.name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '') || 'Сборка';
+    const result = await dialog.showSaveDialog(window, { title: 'Сохранить сборку Veyra', defaultPath: defaultName + '.veyra',
+      filters: [{ name: 'Сборка Veyra', extensions: ['veyra'] }] });
+    if (result.canceled || !result.filePath) return false;
+    const operation = beginOperation('share-export', instance.id);
+    try {
+      await exportBuild(instance, plan.mods, includeMods === true, result.filePath);
+      shareExport = null;
+      status('Файл сборки .veyra сохранён', 'success');
+      return true;
+    } finally { endOperation(operation); }
+  });
+  ipcMain.handle('launcher:share-open', async () => {
+    const result = await dialog.showOpenDialog(window, { title: 'Открыть сборку Veyra', properties: ['openFile'],
+      filters: [{ name: 'Сборка Veyra', extensions: ['veyra'] }] });
+    if (result.canceled || !result.filePaths[0]) return null;
+    const file = result.filePaths[0];
+    const plan = await inspectShare(file);
+    const token = randomUUID();
+    shareImport = { token, file, plan };
+    return { token, name: plan.index.name, minecraftVersion: plan.index.minecraft, loader: plan.index.loader,
+      loaderVersion: plan.index.loaderVersion, count: plan.count, embedded: plan.embedded,
+      unresolved: plan.unresolved.map(name => ({ name })) };
+  });
+  ipcMain.handle('launcher:share-install', async (_event, token, name) => {
+    const pending = shareImport;
+    if (!pending || pending.token !== token) throw new Error('Выберите файл .veyra снова');
+    const { index, note } = pending.plan;
+    if (!manifest.versions.some(version => version.id === index.minecraft)) await refreshVersions();
+    const instance = await createInstance({ name, minecraftVersion: index.minecraft, loader: index.loader,
+      loaderVersion: index.loaderVersion }, { file: pending.file, note });
+    shareImport = null;
+    return { id: instance.id };
+  });
   ipcMain.handle('launcher:unlock-achievements', async (_event, ids) => {
     if (!Array.isArray(ids)) throw new Error('Некорректный список достижений');
     let changed = false;
@@ -2047,6 +2168,7 @@ if (primaryLauncher) app.whenReady().then(async () => {
   await fs.mkdir(dataDir(), { recursive: true });
   if (certificateError) log('Корневые сертификаты Windows не подключены: ' + certificateError);
   await loadState();
+  controller = new VeyraController(dataDir(), safeStorage, veyra.root);
   if (await resumeUpdate().catch(error => { log('Обновление: ' + errorMessage(error)); return false; })) { app.exit(0); return; }
   const recovered = await Promise.allSettled(settings.instances.map(instance => content.recover(instance)));
   for (const result of recovered) if (result.status === 'rejected') log('Восстановление содержимого: ' + errorMessage(result.reason));
@@ -2106,7 +2228,7 @@ app.on('before-quit', (event) => {
   authController?.abort();
   updater.cancel();
   clearTimeout(updateTimer);
-  if (activeOperation?.type === 'server') activeOperation.controller.abort();
+  if (['server', 'controller-transfer'].includes(activeOperation?.type)) activeOperation.controller.abort();
   if (finishingQuit) return;
   event.preventDefault();
   finishingQuit = true;

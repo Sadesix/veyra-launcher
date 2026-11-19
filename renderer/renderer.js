@@ -998,6 +998,7 @@
       ['edit', 'Переименовать', async () => { await api.selectInstance(id); showView('home'); openQuickRename(); }],
       ['image', 'Сменить обложку', () => api.setInstanceCover(id), Boolean(item.legacy)],
       ['puzzle', 'Моды и содержимое', () => window.dispatchEvent(new CustomEvent('veyra:content-open', { detail: { id } }))],
+      ['copy', 'Поделиться сборкой…', () => window.dispatchEvent(new CustomEvent('veyra:share-build', { detail: { id } })), !item.installed],
       ['star', item.favorite ? 'Убрать из избранного' : 'В избранное', () => api.updateInstance(id, { favorite: !item.favorite })],
       ['folder', 'Открыть папку', () => api.openInstanceFolder(id)],
       ['settings', 'Настройки сборки', () => openEdit(item)],
