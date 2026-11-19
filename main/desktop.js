@@ -1870,7 +1870,8 @@ function registerIpc() {
   ipcMain.handle('launcher:controller-inspect-build', (_event, id) => {
     const instance = requireInstance(id);
     if (!instance.installed) throw new Error('Сначала установите сборку');
-    return inspectBuild(instance, project => content.cached('/project/' + encodeURIComponent(project)));
+    return inspectBuild(instance, project => content.cached('/project/' + encodeURIComponent(project)),
+      hashes => modpacks.api('/version_files', { method: 'POST', body: { hashes, algorithm: 'sha1' } }));
   });
   ipcMain.handle('launcher:controller-action', (_event, id, action, world, value) => {
     if (action === 'create' && !manifest.versions.some(item => item.type === 'release' && item.id === value?.minecraftVersion)) {

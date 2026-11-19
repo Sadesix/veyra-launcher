@@ -369,4 +369,4 @@ class ModpackCatalog {
   }
 }
 
-module.exports = { ModpackCatalog, inspectPack, applyPack, readIndex, packPath, packRecord, SUPPORTED, LIMITS };
+module.exports = { ModpackCatalog, inspectPack, applyPack, readIndex, packPath, packRecord, fileHash, SUPPORTED, LIMITS };

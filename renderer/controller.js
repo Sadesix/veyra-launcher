@@ -315,12 +315,12 @@
       for (const mod of result.mods) {
         const label = document.createElement('label');
         const input = document.createElement('input');
-        input.type = 'checkbox'; input.value = mod.name; input.disabled = !mod.supported; input.checked = mod.supported;
+        input.type = 'checkbox'; input.value = mod.name; input.disabled = !mod.supported; input.checked = mod.verified;
         input.addEventListener('change', refreshCount);
         const name = document.createElement('span');
         name.textContent = mod.name;
         const note = document.createElement('small');
-        note.textContent = !mod.supported ? 'Только для клиента' : !mod.verified ? 'Совместимость не указана' : '';
+        note.textContent = !mod.supported ? 'Только для клиента' : !mod.verified ? 'Совместимость неизвестна · можно выбрать вручную' : '';
         label.append(input, name, note);
         el('mods-list').append(label);
       }

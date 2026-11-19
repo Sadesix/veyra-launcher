@@ -13,9 +13,39 @@ async function portFree(port) {
   for (const host of hosts) await new Promise((resolve, reject) => { const probe = net.createServer(); probe.once('error', error => reject(new Error(error.code === 'EADDRINUSE' ? 'Порт ' + port + ' уже занят. Остановите другой сервер или программу' : error.message))); probe.listen({ port, host, exclusive: true }, () => probe.close(resolve)); });
 }
 async function plain(directory) { await fs.mkdir(directory, { recursive: true }); if ((await fs.lstat(directory)).isSymbolicLink()) throw new Error('Папка сервера не должна быть ссылкой'); }
-async function fabricSide(file) {
+const sodiumEntries = [
+  'net/caffeinemc/mods/sodium/service/SodiumWorkarounds.class',
+  'net/caffeinemc/mods/sodium/client/SodiumClientMod.class',
+  'me/jellysquid/mods/sodium/client/SodiumClientMod.class',
+];
+async function declaredServerSide(file, loader) {
   const zip = await open(file, { lazyEntries: true, autoClose: false });
-  try { const entry = (await readAllEntries(zip)).find(item => item.fileName === 'fabric.mod.json'); if (!entry) return ''; let text = ''; for await (const bytes of await openEntryReadStream(zip, entry)) { text += bytes; if (text.length > 1024 * 1024) throw new Error('Большой манифест мода'); } const mod = JSON.parse(text); return mod.environment === 'client' ? 'unsupported' : ['*', 'server'].includes(mod.environment || '*') ? 'required' : ''; }
+  try {
+    const entries = await readAllEntries(zip);
+    const manifests = loader === 'fabric' ? ['fabric.mod.json'] : ['META-INF/neoforge.mods.toml', 'META-INF/mods.toml'];
+    for (const manifest of manifests) {
+      const entry = entries.find(item => item.fileName === manifest);
+      if (!entry || entry.uncompressedSize > 1024 * 1024) continue;
+      const chunks = [];
+      let size = 0;
+      for await (const bytes of await openEntryReadStream(zip, entry)) {
+        size += bytes.length;
+        if (size > 1024 * 1024) throw new Error('Большой манифест мода');
+        chunks.push(bytes);
+      }
+      const text = Buffer.concat(chunks).toString('utf8');
+      if (loader === 'fabric') {
+        const mod = JSON.parse(text);
+        return mod.environment === 'client' ? 'unsupported' : ['*', 'server'].includes(mod.environment || '*') ? 'required' : '';
+      }
+      const header = text.split(/^\s*\[/m, 1)[0];
+      if (loader === 'forge' && /^\s*clientSideOnly\s*=\s*true\s*(?:#.*)?$/m.test(header)) return 'unsupported';
+      // NeoForge Sodium includes a graphics bootstrap service that runs before the mod loader checks sides.
+      if (/^[ \t]*modId\s*=\s*["']sodium["']\s*(?:#.*)?$/m.test(text) &&
+          entries.some(item => sodiumEntries.includes(item.fileName))) return 'unsupported';
+    }
+    return '';
+  }
   finally { zip.close(); }
 }
 class ServerManager {
@@ -70,7 +100,8 @@ class ServerManager {
         const key = record.projectId + ':' + record.versionId;
         try { side = cache[key] || (await this.json('https://api.modrinth.com/v2/project/' + encodeURIComponent(record.projectId), signal)).server_side || ''; if (side) cache[key] = side; } catch { signal.throwIfAborted(); }
       }
-      if (!side && instance.loader === 'fabric') side = await fabricSide(path.join(root, file.name)).catch(() => '');
+      const declared = await declaredServerSide(path.join(root, file.name), instance.loader).catch(() => '');
+      if (declared === 'unsupported' || !side) side = declared;
       if (side === 'required' || side === 'optional') eligible.push({ name: file.name, record }); else skipped.push({ name: file.name, reason: side === 'unsupported' ? 'Только для клиента' : 'Серверная совместимость не указана' });
     }
     // Do not copy a dependent mod without its declared required library.
@@ -139,4 +170,4 @@ class ServerManager {
     return new Promise(resolve => { const timer = setTimeout(() => resolve(false), 20000); child.once('close', () => { clearTimeout(timer); resolve(true); }); });
   }
 }
-module.exports = { ServerManager, portFree, fabricSide };
+module.exports = { ServerManager, portFree, declaredServerSide };

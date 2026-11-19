@@ -1,7 +1,8 @@
 const fs = require('node:fs/promises');
 const { createReadStream } = require('node:fs');
 const path = require('node:path');
-const { fabricSide } = require('./server-manager');
+const { declaredServerSide } = require('./server-manager');
+const { fileHash } = require('./modpacks');
 
 const CONFIG_DIRS = ['config', 'defaultconfigs', 'kubejs', 'scripts', 'global_packs', 'openloader', 'paxi', 'datapacks', 'patchouli_books'];
 const safeName = name => name !== '.' && name !== '..' && !/[/\\:\p{Cc}]/u.test(name) && Buffer.byteLength(name) <= 255;
@@ -15,24 +16,42 @@ async function directoryEntries(directory) {
   return fs.readdir(directory, { withFileTypes: true });
 }
 
-async function inspectBuild(instance, lookup) {
+async function inspectBuild(instance, lookup, lookupHashes) {
   await directoryEntries(instance.directory);
   const directory = path.join(instance.directory, 'mods');
   const files = (await directoryEntries(directory)).filter(entry => entry.isFile() && safeName(entry.name) && /\.jar$/i.test(entry.name));
   const installed = await fs.readFile(path.join(instance.directory, '.veyra-content.json'), 'utf8').then(JSON.parse).catch(() => ({ items: [] }));
-  const records = new Map((installed.items || []).filter(item => item.kind === 'mods').map(item => [item.file, item]));
+  const records = new Map((Array.isArray(installed?.items) ? installed.items : []).filter(item => item.kind === 'mods').map(item => [item.file, item]));
+  const inspected = [];
+  for (let offset = 0; offset < files.length; offset += 12) {
+    inspected.push(...await Promise.all(files.slice(offset, offset + 12).map(async ({ name }) => {
+      const file = path.join(directory, name);
+      const declared = instance.loader === 'vanilla' ? 'unsupported' : await declaredServerSide(file, instance.loader).catch(() => '');
+      const projectId = records.get(name)?.projectId;
+      const sha1 = lookupHashes && !projectId && declared !== 'unsupported' ? await fileHash(file, 'sha1').catch(() => '') : '';
+      return { name, projectId, declared, sha1 };
+    })));
+  }
+  const hashes = [...new Set(inspected.map(mod => mod.sha1).filter(Boolean))];
+  const versions = new Map();
+  for (let offset = 0; offset < hashes.length; offset += 200) {
+    const batch = hashes.slice(offset, offset + 200);
+    const found = await lookupHashes(batch).catch(() => null);
+    for (const sha1 of batch) {
+      const id = found?.[sha1]?.project_id;
+      if (typeof id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(id)) versions.set(sha1, id);
+    }
+  }
   const projects = new Map();
   const mods = [];
-  // Reuse Modrinth project data and Fabric's declared physical side.
-  for (let offset = 0; offset < files.length; offset += 12) {
-    mods.push(...await Promise.all(files.slice(offset, offset + 12).map(async ({ name }) => {
-      const record = records.get(name);
-      if (record?.projectId && !projects.has(record.projectId)) {
-        projects.set(record.projectId, lookup(record.projectId).then(project => project.server_side, () => ''));
+  for (let offset = 0; offset < inspected.length; offset += 12) {
+    mods.push(...await Promise.all(inspected.slice(offset, offset + 12).map(async ({ name, declared, projectId, sha1 }) => {
+      const id = projectId || versions.get(sha1);
+      if (id && declared !== 'unsupported' && !projects.has(id)) {
+        projects.set(id, lookup(id).then(project => project?.server_side, () => ''));
       }
-      const side = await projects.get(record?.projectId);
-      const declared = instance.loader === 'fabric' ? await fabricSide(path.join(directory, name)).catch(() => '') : '';
-      const supported = instance.loader !== 'vanilla' && side !== 'unsupported' && declared !== 'unsupported';
+      const side = await projects.get(id);
+      const supported = side !== 'unsupported' && declared !== 'unsupported';
       return { name, supported, verified: supported && (['required', 'optional'].includes(side) || declared === 'required') };
     })));
   }
@@ -70,7 +89,10 @@ async function buildFiles(instance, mods = [], worldName = '', directories = CON
   await directoryEntries(instance.directory);
   if (mods.length && instance.loader !== 'vanilla') {
     await directoryEntries(path.join(instance.directory, 'mods'));
-    for (const name of new Set(mods)) await add(path.join(instance.directory, 'mods', name), 'mods/' + name);
+    for (const name of new Set(mods)) {
+      const source = path.join(instance.directory, 'mods', name);
+      if (await declaredServerSide(source, instance.loader).catch(() => '') !== 'unsupported') await add(source, 'mods/' + name);
+    }
   }
   for (const directory of directories) await walk(path.join(instance.directory, directory), directory);
   if (worldName) {

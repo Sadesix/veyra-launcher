@@ -21,6 +21,7 @@ import tempfile
 import urllib.error
 import urllib.request
 import uuid
+import zipfile
 
 
 PROTOCOL = 2
@@ -39,6 +40,9 @@ PACK_DIRS = {'mods', 'config', 'defaultconfigs', 'kubejs', 'scripts', 'global_pa
              'openloader', 'paxi', 'datapacks', 'patchouli_books', 'world'}
 MAX_PACK_BYTES = 64 * 1024 ** 3
 MAX_PACK_FILES = 100000
+SODIUM_ENTRIES = {'net/caffeinemc/mods/sodium/service/SodiumWorkarounds.class',
+                  'net/caffeinemc/mods/sodium/client/SodiumClientMod.class',
+                  'me/jellysquid/mods/sodium/client/SodiumClientMod.class'}
 UNIT_TEXT = """[Unit]
 Description=Veyra Minecraft world %i
 Wants=network-online.target
@@ -569,6 +573,48 @@ def apply_build(world, cache):
     atomic_write(marker, b'1\n')
 
 
+def client_only_mod(file, loader):
+    try:
+        with zipfile.ZipFile(file) as jar:
+            names = set(jar.namelist())
+            toml = ('META-INF/neoforge.mods.toml', 'META-INF/mods.toml')
+            for manifest in ('fabric.mod.json',) if loader == 'fabric' else toml:
+                if manifest not in names or jar.getinfo(manifest).file_size > 1024 ** 2:
+                    continue
+                text = jar.read(manifest).decode('utf-8')
+                if loader == 'fabric':
+                    return json.loads(text).get('environment') == 'client'
+                header = re.split(r'^\s*\[', text, maxsplit=1, flags=re.M)[0]
+                if loader == 'forge' and re.search(r'^\s*clientSideOnly\s*=\s*true\s*(?:#.*)?$', header, re.M):
+                    return True
+                if names & SODIUM_ENTRIES and re.search(r'''^[ \t]*modId\s*=\s*["']sodium["']\s*(?:#.*)?$''', text, re.M):
+                    return True
+    except (OSError, ValueError, AttributeError, RuntimeError, zipfile.BadZipFile):
+        pass
+    return False
+
+
+def isolate_imported_client_mods(world, cache):
+    # Existing imports may include client jars. Check the original bundle so
+    # this does not touch mods that the owner added or replaced on the VM.
+    if not world.get('hasBundle'):
+        return
+    loader = world.get('loader', 'vanilla')
+    imported = BUNDLES / world['id'] / 'mods'
+    for original in imported.glob('*'):
+        active = Path('mods') / original.name
+        if (active.suffix.lower() != '.jar' or active.is_symlink() or not active.is_file() or
+            not client_only_mod(original, loader) or digest(original, 'sha256') != digest(active, 'sha256')):
+            continue
+        archive = cache / 'client-only-mods'
+        archive.mkdir(exist_ok=True)
+        destination = archive / active.name
+        if destination.exists() or destination.is_symlink():
+            destination = archive / (uuid.uuid4().hex + '-' + active.name)
+        active.rename(destination)
+        print('Veyra Controller: клиентский мод перемещён в ' + str(destination), flush=True)
+
+
 def launcher_args(world, java, jar, cache):
     loader, version = world.get('loader', 'vanilla'), world['minecraftVersion']
     if loader == 'vanilla':
@@ -637,6 +683,7 @@ def run_world(world_id):
     jar = CACHE / ('minecraft-' + version + '.jar')
     java = CACHE / ('temurin-' + str(major)) / 'bin' / 'java'
     apply_build(world, cache)
+    isolate_imported_client_mods(world, cache)
     arguments = launcher_args(world, java, jar, cache)
     agent = java_agent(cache) if world['veyraLogin'] else []
     configure_game(world)
