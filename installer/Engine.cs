@@ -80,6 +80,8 @@ namespace Veyra.Setup {
     static string LocalData { get { return Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData); } }
     public string DefaultRoot { get { return Test ? Path.Combine(testDir, "Veyra Launcher") : Path.Combine(LocalData, "Programs", "Veyra Launcher"); } }
     public string UninstallKey { get { return Test ? @"Software\VeyraLauncherTest\Uninstall\VeyraLauncher" : @"Software\Microsoft\Windows\CurrentVersion\Uninstall\VeyraLauncher"; } }
+    string ClassesKey { get { return Test ? @"Software\VeyraLauncherTest\Classes" : @"Software\Classes"; } }
+    const string ShareProgram = "Veyra.Launcher.Build";
     public string DesktopLink { get { return Path.Combine(Test ? Path.Combine(testDir, "Desktop") : Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), ShortcutName); } }
     public string StartMenuLink { get { return Path.Combine(Test ? Path.Combine(testDir, "Programs") : Environment.GetFolderPath(Environment.SpecialFolder.Programs), ShortcutName); } }
     // Настройки лаунчера (вход, параметры, Java) — userData Electron; сборки лежат в «Документах» и не трогаются.
@@ -389,6 +391,38 @@ namespace Veyra.Setup {
         key.SetValue("NoModify", 1, RegistryValueKind.DWord);
         key.SetValue("NoRepair", 1, RegistryValueKind.DWord);
       }
+      try {
+        var stub = "\"" + Path.Combine(root, StubName) + "\"";
+        using (var key = Registry.CurrentUser.CreateSubKey(ClassesKey + @"\" + ShareProgram)) {
+          key.SetValue("", "Сборка Veyra");
+          using (var icon = key.CreateSubKey("DefaultIcon")) icon.SetValue("", stub + ",0");
+          using (var command = key.CreateSubKey(@"shell\open\command")) command.SetValue("", stub + " \"%1\"");
+        }
+        using (var extension = Registry.CurrentUser.CreateSubKey(ClassesKey + @"\.veyra")) {
+          if (string.IsNullOrEmpty(extension.GetValue("") as string) &&
+              (Test || string.IsNullOrEmpty(Registry.GetValue(@"HKEY_CLASSES_ROOT\.veyra", "", "") as string))) {
+            extension.SetValue("", ShareProgram);
+          }
+          using (var handlers = extension.CreateSubKey("OpenWithProgids")) handlers.SetValue(ShareProgram, "");
+        }
+        if (!Test) Native.AssociationsChanged();
+      } catch (Exception error) { Log.Write("Ассоциация .veyra: " + error.Message); }
+    }
+
+    void UnregisterShare(string root) {
+      var program = ClassesKey + @"\" + ShareProgram;
+      using (var command = Registry.CurrentUser.OpenSubKey(program + @"\shell\open\command")) {
+        var expected = "\"" + Path.Combine(root, StubName) + "\" \"%1\"";
+        if (command == null || !string.Equals(command.GetValue("") as string, expected, StringComparison.OrdinalIgnoreCase)) return;
+      }
+      using (var extension = Registry.CurrentUser.OpenSubKey(ClassesKey + @"\.veyra", true)) {
+        if (extension != null) {
+          if (string.Equals(extension.GetValue("") as string, ShareProgram, StringComparison.OrdinalIgnoreCase)) extension.DeleteValue("", false);
+          using (var handlers = extension.OpenSubKey("OpenWithProgids", true)) if (handlers != null) handlers.DeleteValue(ShareProgram, false);
+        }
+      }
+      Registry.CurrentUser.DeleteSubKeyTree(program, false);
+      if (!Test) Native.AssociationsChanged();
     }
 
     // Прежние версии удаляются, только если их EXE свободен: работающий лаунчер старой версии не пострадает,
@@ -482,6 +516,7 @@ namespace Veyra.Setup {
         try { if (PointsInto(link, root)) System.IO.File.Delete(link); } catch (Exception error) { Log.Write("Ярлык " + link + ": " + error.Message); }
       }
       try { Registry.CurrentUser.DeleteSubKeyTree(UninstallKey, false); } catch (Exception error) { Log.Write("Реестр: " + error.Message); }
+      try { UnregisterShare(root); } catch (Exception error) { Log.Write("Ассоциация .veyra: " + error.Message); }
       Step(2);
       Progress(0.35, "Удаляем файлы");
       if (Directory.Exists(root)) {

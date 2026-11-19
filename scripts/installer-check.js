@@ -17,6 +17,7 @@ const { version } = require('../package.json');
 const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const REG = 'HKCU\\Software\\VeyraLauncherTest\\Uninstall\\VeyraLauncher';
+const SHARE_OPEN = 'HKCU\\Software\\VeyraLauncherTest\\Classes\\Veyra.Launcher.Build\\shell\\open\\command';
 
 async function waitFor(check, timeout, message) {
   const deadline = Date.now() + timeout;
@@ -85,6 +86,9 @@ async function main() {
     for (const file of ['Veyra Launcher.exe', 'Uninstall Veyra Launcher.exe', path.join('app-' + build, 'Veyra Launcher.exe'), path.join('app-' + build, '.veyra-ready'), path.join('app-' + build, 'resources', 'app.asar')]) assert.ok(fs.existsSync(path.join(installRoot, file)), 'Есть ' + file);
     assert.equal(regValue('DisplayVersion'), version); assert.equal(regValue('InstallLocation'), installRoot);
     assert.match(regValue('UninstallString'), /Uninstall Veyra Launcher\.exe" --uninstall$/);
+    const shareCommand = spawnSync('reg', ['query', SHARE_OPEN, '/ve'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(shareCommand.status, 0);
+    assert(shareCommand.stdout.includes('"' + path.join(installRoot, 'Veyra Launcher.exe') + '" "%1"'));
     assert.equal(shortcutTarget(path.join(T, 'Programs', 'Veyra Launcher.lnk')).toLowerCase(), path.join(installRoot, 'Veyra Launcher.exe').toLowerCase());
     assert.ok(!fs.existsSync(path.join(T, 'Desktop', 'Veyra Launcher.lnk')), 'Без --no-desktop ярлыка на столе нет');
     report.push('тихая установка ' + ((Date.now() - started) / 1000).toFixed(1) + ' с');
@@ -167,6 +171,7 @@ async function main() {
     assert.equal(result.code, 0, result.out);
     await waitFor(() => !fs.existsSync(installRoot), 30000, 'папка установки удалена');
     assert.equal(regValue('DisplayVersion'), null, 'Запись в «Приложениях» удалена');
+    assert.notEqual(spawnSync('reg', ['query', SHARE_OPEN], { windowsHide: true }).status, 0, 'Ассоциация .veyra удалена');
     assert.ok(!fs.existsSync(path.join(T, 'Programs', 'Veyra Launcher.lnk')), 'Ярлык удалён');
     assert.ok(fs.existsSync(path.join(T, 'data', 'settings.json')), 'Настройки остались');
     report.push('удаление');

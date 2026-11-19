@@ -127,6 +127,11 @@ namespace Veyra.Setup {
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
     static extern void SHCreateItemFromParsingName(string path, IntPtr context, ref Guid interfaceId, out IShellItem item);
 
+    [DllImport("shell32.dll")]
+    static extern void SHChangeNotify(int eventId, uint flags, IntPtr item1, IntPtr item2);
+
+    public static void AssociationsChanged() { SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero); }
+
     // Выбор папки в окне проводника Windows; null — если пользователь передумал.
     public static string PickFolder(IntPtr owner, string title, string start) {
       var dialog = (IFileDialog)new FileOpenDialogCom();

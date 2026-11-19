@@ -1,6 +1,8 @@
 """SSH control plane and systemd entry point for Veyra's Linux worlds."""
 
 import base64
+from contextlib import contextmanager
+from datetime import datetime, timezone
 import errno
 import fcntl
 import hashlib
@@ -24,11 +26,13 @@ import uuid
 import zipfile
 
 
-PROTOCOL = 2
+PROTOCOL = 3
 HOME = Path('/usr/local/lib/veyra-controller')
 ROOT = Path('/var/lib/veyra-controller')
 WORLDS = ROOT / 'worlds'
 BUNDLES = ROOT / 'bundles'
+TRASH = ROOT / 'trash'
+PRIVATE = Path('/var/lib/private')
 CACHE = Path('/var/cache/veyra-controller')
 UNIT = 'veyra-minecraft@'
 UNIT_FILE = Path('/etc/systemd/system') / (UNIT + '.service')
@@ -36,10 +40,23 @@ MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
 WORLD_ID = re.compile(r'[0-9a-f]{32}')
 VERSION_ID = re.compile(r'[0-9A-Za-z][0-9A-Za-z._+-]{0,99}')
 READY = re.compile(r'\bDone \([\d.,]+s\)!|For help, type "help"')
-PACK_DIRS = {'mods', 'config', 'defaultconfigs', 'kubejs', 'scripts', 'global_packs',
-             'openloader', 'paxi', 'datapacks', 'patchouli_books', 'world'}
+BUILD_DIRS = {'mods', 'config', 'defaultconfigs', 'kubejs', 'scripts', 'global_packs',
+              'openloader', 'paxi', 'datapacks', 'patchouli_books'}
+PACK_DIRS = BUILD_DIRS | {'world'}
 MAX_PACK_BYTES = 64 * 1024 ** 3
 MAX_PACK_FILES = 100000
+MAX_TEXT_BYTES = 1024 ** 2
+DIR_FLAGS = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_DIRECTORY', 0)
+FILE_FLAGS = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+GAME_RULES = {
+    'gamemode': ('survival', ('survival', 'creative', 'adventure', 'spectator')),
+    'difficulty': ('normal', ('peaceful', 'easy', 'normal', 'hard')),
+    'view-distance': (10, (2, 32)), 'simulation-distance': (10, (3, 32)),
+    'spawn-protection': (16, (0, 256)), 'motd': ('A Minecraft Server', 160), 'level-seed': ('', 128),
+    'pvp': (True, None), 'hardcore': (False, None), 'allow-flight': (False, None),
+    'white-list': (False, None), 'enable-command-block': (False, None), 'allow-nether': (True, None),
+    'force-gamemode': (False, None), 'generate-structures': (True, None),
+}
 SODIUM_ENTRIES = {'net/caffeinemc/mods/sodium/service/SodiumWorkarounds.class',
                   'net/caffeinemc/mods/sodium/client/SodiumClientMod.class',
                   'me/jellysquid/mods/sodium/client/SodiumClientMod.class'}
@@ -111,6 +128,7 @@ def install(source, account):
     os.umask(0o022)
     for directory in (HOME, ROOT, WORLDS, CACHE, BUNDLES):
         directory.mkdir(mode=0o755, exist_ok=True)
+    TRASH.mkdir(mode=0o700, exist_ok=True)
     with (ROOT / 'control.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         atomic_write(HOME / 'controller.py', source.encode())
@@ -244,43 +262,44 @@ def pack_path(name):
         any(not part or part in ('.', '..') or len(part.encode()) > 255 or
             re.search(r'[:\\\x00-\x1f\x7f]', part) for part in parts)):
         raise ControllerError('Недопустимый путь файла сборки')
-    if parts[0] == 'mods' and (len(parts) != 2 or not parts[1].lower().endswith('.jar')):
+    if parts[0] == 'mods' and (len(parts) != 2 or not parts[1].lower().endswith(('.jar', '.jar.disabled'))):
         raise ControllerError('Недопустимый файл мода')
     return Path(*parts)
+
+
+def receive_build(stream, header, stage, directories):
+    count = integer(header, 'count', 0, MAX_PACK_FILES, 'Слишком много файлов сборки')
+    total = integer(header, 'total', 0, MAX_PACK_BYTES, 'Слишком большая сборка')
+    if total * 2 > shutil.disk_usage(ROOT).free:
+        raise ControllerError('На ВМ не хватает места для переноса сборки и её рабочего экземпляра')
+    stage.mkdir(mode=0o755)
+    received = 0
+    mods = 0
+    for _ in range(count):
+        item = stream_header(stream)
+        relative = pack_path(item['path'])
+        if relative.parts[0] not in directories:
+            raise ControllerError('Этот файл не входит в выбранный тип переноса')
+        length = integer(item, 'size', 0, total - received, 'Неверный размер файла сборки')
+        target = stage / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open('xb') as output:
+            copy_exact(stream, output, length)
+        received += length
+        mods += relative.parts[0] == 'mods'
+    if received != total or stream.read(1):
+        raise ControllerError('Размер сборки не совпал')
+    return count, mods
 
 
 def import_build(stream):
     header = stream_header(stream)
     world = settings(header['settings'])
-    count = integer(header, 'count', 0, MAX_PACK_FILES, 'Слишком много файлов сборки')
-    total = integer(header, 'total', 0, MAX_PACK_BYTES, 'Слишком большая сборка')
-    if total * 2 > shutil.disk_usage(ROOT).free:
-        raise ControllerError('На ВМ не хватает места для переноса сборки и её рабочего экземпляра')
     os.umask(0o022)
     storage = BUNDLES / world['id']
     with tempfile.TemporaryDirectory(dir=BUNDLES) as temporary:
         stage = Path(temporary) / 'files'
-        stage.mkdir()
-        received = 0
-        mods = 0
-        for _ in range(count):
-            item = stream_header(stream)
-            relative = pack_path(item['path'])
-            length = integer(item, 'size', 0, total - received, 'Неверный размер файла сборки')
-            target = stage / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with target.open('xb') as output:
-                remaining = length
-                while remaining:
-                    block = stream.read(min(1024 ** 2, remaining))
-                    if not block:
-                        raise ControllerError('Отправка сборки прервалась')
-                    output.write(block)
-                    remaining -= len(block)
-            received += length
-            mods += relative.parts[0] == 'mods'
-        if received != total or stream.read(1):
-            raise ControllerError('Размер сборки не совпал')
+        count, mods = receive_build(stream, header, stage, PACK_DIRS)
         with (ROOT / 'control.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             if any(item['port'] == world['port'] for item in read_worlds()):
@@ -295,6 +314,518 @@ def import_build(stream):
                     storage.rename(stage)
                 raise
     return {'id': world['id']}
+
+
+def copy_exact(stream, output, remaining):
+    while remaining:
+        block = stream.read(min(1024 ** 2, remaining))
+        if not block:
+            raise ControllerError('Передача файла прервалась')
+        output.write(block)
+        remaining -= len(block)
+
+
+def path_parts(value, allow_root=False, internal=False):
+    if allow_root and value == '':
+        return ()
+    if not isinstance(value, str) or len(value) > 8192:
+        raise ControllerError('Некорректный путь')
+    parts = value.split('/')
+    if len(parts) > 48 or any(not part or part in ('.', '..') or len(part.encode()) > 255 or
+                            re.search(r'[:\\\x00-\x1f\x7f]', part) for part in parts):
+        raise ControllerError('Некорректный путь')
+    if not internal and (parts[0] == '.veyra' or any(part.startswith('.veyra-upload-') for part in parts)):
+        raise ControllerError('Служебная папка контроллера')
+    return tuple(parts)
+
+
+def state_path(world):
+    return PRIVATE / ('veyra-world-' + world['id'])
+
+
+@contextmanager
+def directory_fd(root, parts=(), create=False):
+    fd = os.open(root, DIR_FLAGS)
+    try:
+        owner = os.fstat(fd)
+        for part in parts:
+            if create:
+                try:
+                    os.mkdir(part, mode=0o755, dir_fd=fd)
+                    os.chown(part, owner.st_uid, owner.st_gid, dir_fd=fd, follow_symlinks=False)
+                except FileExistsError:
+                    pass
+            next_fd = os.open(part, DIR_FLAGS, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        yield fd
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def regular_file(fd, name):
+    with os.fdopen(os.open(name, FILE_FLAGS, dir_fd=fd), 'rb') as file:
+        info = os.fstat(file.fileno())
+        # Mod code can create links in the world directory. Never expose their targets.
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ControllerError('Доступен только обычный файл без ссылок')
+        yield file, info
+
+
+def replace_file(fd, name, fill, owner, replace=True, etag=None):
+    try:
+        with regular_file(fd, name) as (old, info):
+            if not replace:
+                raise ControllerError('Файл «' + name + '» уже есть в этой папке')
+            if etag is not None and (info.st_size > MAX_TEXT_BYTES or hashlib.sha256(old.read(MAX_TEXT_BYTES + 1)).hexdigest() != etag):
+                raise ControllerError('Файл изменился на ВМ. Откройте его снова перед сохранением')
+            mode = stat.S_IMODE(info.st_mode) & 0o777
+    except FileNotFoundError:
+        if etag is not None:
+            raise ControllerError('Файл удалён на ВМ. Откройте список файлов снова')
+        mode = 0o644
+    tmp = '.veyra-upload-' + uuid.uuid4().hex
+    try:
+        descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=fd)
+        with os.fdopen(descriptor, 'wb') as output:
+            os.fchown(output.fileno(), owner.st_uid, owner.st_gid)
+            os.fchmod(output.fileno(), mode)
+            fill(output)
+        os.replace(tmp, name, src_dir_fd=fd, dst_dir_fd=fd)
+    finally:
+        try:
+            os.unlink(tmp, dir_fd=fd)
+        except FileNotFoundError:
+            pass
+
+
+def ensure_workspace(world):
+    root = state_path(world)
+    PRIVATE.mkdir(mode=0o700, exist_ok=True)
+    try:
+        root.mkdir(mode=0o700)
+        os.chown(root, 65534, 65534, follow_symlinks=False)
+    except FileExistsError:
+        pass
+    with directory_fd(root) as root_fd:
+        owner = os.fstat(root_fd)
+    bundle = BUNDLES / world['id']
+    if world.get('hasBundle'):
+        with directory_fd(root, ('.veyra',), create=True) as cache:
+            try:
+                os.stat('build-applied', dir_fd=cache, follow_symlinks=False)
+                return root
+            except FileNotFoundError:
+                pass
+            if not bundle.is_dir():
+                raise ControllerError('Файлы импортированной сборки не найдены')
+            for source in bundle.rglob('*'):
+                if source.is_symlink() or not source.is_file():
+                    continue
+                relative = source.relative_to(bundle).parts
+                with directory_fd(root, relative[:-1], create=True) as handle:
+                    try:
+                        replace_file(handle, relative[-1], lambda out: copy_local(source, out), owner, replace=False)
+                    except ControllerError:
+                        with regular_file(handle, relative[-1]):
+                            pass
+            replace_file(cache, 'build-applied', lambda out: out.write(b'1\n'), owner)
+    return root
+
+
+def copy_local(path, output):
+    with path.open('rb') as source:
+        shutil.copyfileobj(source, output, 1024 ** 2)
+
+
+def list_files(root, relative):
+    parts = path_parts(relative, allow_root=True)
+    entries = []
+    try:
+        with directory_fd(root, parts) as fd:
+            with os.scandir(fd) as directory:
+                for entry in directory:
+                    if entry.name == '.veyra' or entry.name.startswith('.veyra-upload-'):
+                        continue
+                    info = entry.stat(follow_symlinks=False)
+                    if stat.S_ISDIR(info.st_mode):
+                        kind = 'directory'
+                    elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                        kind = 'file'
+                    else:
+                        continue
+                    entries.append({'name': entry.name, 'kind': kind, 'size': info.st_size,
+                                    'modified': int(info.st_mtime * 1000)})
+                    if len(entries) >= 5000:
+                        break
+    except FileNotFoundError:
+        if parts:
+            raise ControllerError('Папка на ВМ не найдена')
+    return sorted(entries, key=lambda item: (item['kind'] != 'directory', item['name'].casefold()))
+
+
+def read_file(root, name):
+    parts = path_parts(name)
+    with directory_fd(root, parts[:-1]) as fd, regular_file(fd, parts[-1]) as (file, info):
+        if info.st_size > MAX_TEXT_BYTES:
+            raise ControllerError('Редактор открывает текстовые файлы до 1 МБ')
+        content = file.read(MAX_TEXT_BYTES + 1)
+        if len(content) > MAX_TEXT_BYTES or b'\0' in content:
+            raise ControllerError('Файл доступен для скачивания')
+        try:
+            text = content.decode('utf-8')
+        except UnicodeDecodeError as error:
+            raise ControllerError('Редактор открывает файлы UTF-8. Этот файл можно скачать') from error
+        return {'text': text, 'etag': hashlib.sha256(content).hexdigest()}
+
+
+def property_data(root):
+    try:
+        with directory_fd(root) as fd, regular_file(fd, 'server.properties') as (file, info):
+            if info.st_size > MAX_TEXT_BYTES:
+                raise ControllerError('server.properties превышает 1 МБ')
+            return file.read(MAX_TEXT_BYTES + 1)
+    except FileNotFoundError:
+        return b''
+
+
+def property_values(content):
+    result = {}
+    for line in content.decode('utf-8', errors='replace').splitlines():
+        match = re.match(r'^\s*([\w.-]+)\s*[:=]\s*(.*)$', line)
+        if match:
+            result[match[1]] = re.sub(r'\\u([a-fA-F0-9]{4})|\\(.)',
+                                     lambda m: chr(int(m[1], 16)) if m[1] else m[2], match[2])
+    # Java writes a surrogate pair for characters outside the BMP.
+    return {key: value.encode('utf-16', 'surrogatepass').decode('utf-16', 'replace') for key, value in result.items()}
+
+
+def merged_properties(content, values):
+    pattern = re.compile(rb'^\s*([A-Za-z0-9_.-]+)\s*[:=]')
+    lines = [line for line in content.splitlines() if not (match := pattern.match(line)) or match[1].decode() not in values]
+    def escaped(value):
+        text = str(value).lower() if type(value) is bool else str(value)
+        text = text.replace('\\', '\\\\')
+        units = text.encode('utf-16-le', 'surrogatepass')
+        codes = [int.from_bytes(units[i:i+2], 'little') for i in range(0, len(units), 2)]
+        return ''.join(chr(code) if 32 <= code <= 126 else '\\u%04x' % code for code in codes)
+    lines.extend(f'{key}={escaped(value)}'.encode() for key, value in values.items())
+    return b'\n'.join(lines) + b'\n'
+
+
+def game_rules(content, changes=None):
+    stored = property_values(content)
+    values = {}
+    for key, (default, limits) in GAME_RULES.items():
+        value = stored.get(key, default)
+        if changes is not None:
+            value = changes.get(key, default)
+        elif type(default) is bool and type(value) is str:
+            value = {'true': True, 'false': False}.get(value, default)
+        elif type(default) is int and type(value) is str:
+            value = int(value) if re.fullmatch(r'[0-9]{1,6}', value) else default
+        if type(default) is bool:
+            valid = type(value) is bool
+        elif type(default) is int:
+            valid = type(value) is int and limits[0] <= value <= limits[1]
+        elif type(limits) is tuple:
+            valid = value in limits
+        else:
+            valid = isinstance(value, str) and len(value) <= limits and not re.search(r'[\x00-\x1f\x7f]', value)
+        if changes is not None and not valid:
+            raise ControllerError('Недопустимое значение ' + key)
+        values[key] = value if valid else default
+    return values
+
+
+def save_game_rules(root, changes, etag):
+    before = property_data(root)
+    if hashlib.sha256(before).hexdigest() != etag:
+        raise ControllerError('Настройки изменились на ВМ. Откройте их снова')
+    values = game_rules(before, changes)
+    with directory_fd(root) as fd:
+        replace_file(fd, 'server.properties', lambda out: out.write(merged_properties(before, values)), os.fstat(fd))
+
+
+def save_server_config(world, root, request):
+    config = settings(request['settings'], world)
+    before = property_data(root)
+    if hashlib.sha256(before).hexdigest() != request['etag']:
+        raise ControllerError('Настройки изменились на ВМ. Откройте их снова')
+    values = game_rules(before, request['rules'])
+    values.update({'server-port': config['port'], 'max-players': config['maxPlayers'],
+                   'online-mode': config['veyraLogin']})
+    with directory_fd(root) as fd:
+        owner = os.fstat(fd)
+        try:
+            os.stat('server.properties', dir_fd=fd, follow_symlinks=False)
+            existed = True
+        except FileNotFoundError:
+            existed = False
+        replace_file(fd, 'server.properties', lambda out: out.write(merged_properties(before, values)), owner)
+        try:
+            json_file(WORLDS / (world['id'] + '.json'), config)
+        except OSError:
+            if existed:
+                replace_file(fd, 'server.properties', lambda out: out.write(before), owner)
+            else:
+                os.unlink('server.properties', dir_fd=fd)
+            raise
+    return {'id': world['id']}
+
+
+def level_folder(root):
+    name = property_values(property_data(root)).get('level-name', '') or 'world'
+    if len(path_parts(name)) != 1 or name.startswith('.') or name in BUILD_DIRS | {'libraries', 'logs', 'versions'}:
+        raise ControllerError('Проверьте level-name в server.properties')
+    return name
+
+
+def require_stopped(world_id):
+    if states().get(world_id, 'stopped') not in ('stopped', 'error'):
+        raise ControllerError('Остановите сервер перед изменением файлов или переносом')
+
+
+def trash_directory(world, kind):
+    name = uuid.uuid4().hex
+    folder = TRASH / name
+    folder.mkdir(mode=0o700)
+    detail = {'id': name, 'serverId': world['id'], 'name': world['name'], 'kind': kind,
+              'time': datetime.now(timezone.utc).isoformat()}
+    return folder, detail
+
+
+def move_files(pairs, finish):
+    moved = []
+    try:
+        for source, target in pairs:
+            if not source.exists() and not source.is_symlink():
+                continue
+            if target.exists() or target.is_symlink():
+                raise ControllerError('Путь на ВМ уже занят: ' + target.name)
+            source.rename(target)
+            moved.append((source, target))
+        return finish()
+    except Exception:
+        for source, target in reversed(moved):
+            target.rename(source)
+        raise
+
+
+def delete_server(world):
+    root = state_path(world)
+    folder, detail = trash_directory(world, 'server')
+    config = WORLDS / (world['id'] + '.json')
+    move_files([(root, folder / 'state'), (BUNDLES / world['id'], folder / 'bundle'),
+                (config, folder / 'server.json')], lambda: json_file(folder / 'entry.json', detail))
+    return detail
+
+
+def delete_level(world, root):
+    level = level_folder(root)
+    source = root / level
+    if not source.is_dir() or source.is_symlink():
+        raise ControllerError('Сохранение мира отсутствует')
+    folder, detail = trash_directory(world, 'world')
+    move_files([(source, folder / 'level')], lambda: json_file(folder / 'entry.json', detail))
+    return detail
+
+
+def restore_trash(identifier):
+    if not isinstance(identifier, str) or not WORLD_ID.fullmatch(identifier):
+        raise ControllerError('Запись корзины не найдена')
+    folder = TRASH / identifier
+    info = json.loads((folder / 'entry.json').read_text(encoding='utf-8'))
+    if info['kind'] == 'server':
+        server = json.loads((folder / 'server.json').read_text(encoding='utf-8'))
+        if any(item['id'] == server['id'] or item['port'] == server['port'] for item in read_worlds()):
+            raise ControllerError('Сервер с таким идентификатором или портом уже есть на ВМ')
+        port_available(server['port'])
+        PRIVATE.mkdir(mode=0o700, exist_ok=True)
+        move_files([(folder / 'state', state_path(server)), (folder / 'bundle', BUNDLES / server['id']),
+                    (folder / 'server.json', WORLDS / (server['id'] + '.json'))], (folder / 'entry.json').unlink)
+        return {'id': server['id']}
+    server = get_world(info['serverId'])
+    require_stopped(server['id'])
+    root = ensure_workspace(server)
+    if info['kind'] == 'transfer':
+        directories = transfer_mode(info['mode'])
+        level = level_folder(root)
+        backup, record = trash_directory(server, 'transfer')
+        record.update(mode=info['mode'], modCount=server.get('modCount', 0), sourceId=server.get('sourceId', ''))
+        backups, replacements = [], []
+        for name in sorted(directories):
+            target = root / (level if name == 'world' else name)
+            if target.is_symlink():
+                raise ControllerError('Заменяемая папка является ссылкой: ' + target.name)
+            backups.append((target, backup / name))
+            replacements.append((folder / name, target))
+        config = WORLDS / (server['id'] + '.json')
+        original = config.read_bytes()
+        def commit():
+            if info['mode'] != 'world':
+                server.update(modCount=info['modCount'], sourceId=info['sourceId'])
+                json_file(config, server)
+            try:
+                json_file(backup / 'entry.json', record)
+                (folder / 'entry.json').unlink()
+            except OSError:
+                (backup / 'entry.json').unlink(missing_ok=True)
+                atomic_write(config, original)
+                raise
+        move_files(backups + replacements, commit)
+        folder.rmdir()
+        return {'id': server['id']}
+    if info['kind'] != 'world':
+        raise ControllerError('Запись корзины не поддерживается')
+    level = root / level_folder(root)
+    if level.exists() or level.is_symlink():
+        raise ControllerError('Выбранный сервер уже содержит мир. Сначала переместите его в корзину')
+    move_files([(folder / 'level', level)], (folder / 'entry.json').unlink)
+    folder.rmdir()
+    return {'id': server['id']}
+
+
+def purge_trash(identifier):
+    if not isinstance(identifier, str) or not WORLD_ID.fullmatch(identifier):
+        raise ControllerError('Запись корзины не найдена')
+    folder = TRASH / identifier
+    if folder.is_symlink() or not (folder / 'entry.json').is_file() or folder.resolve().parent != TRASH.resolve():
+        raise ControllerError('Запись корзины не найдена')
+    shutil.rmtree(folder)
+    return True
+
+
+def transfer_mode(mode):
+    allowed = {'build': BUILD_DIRS, 'world': {'world'}, 'both': PACK_DIRS}
+    if mode not in allowed:
+        raise ControllerError('Выберите тип переноса')
+    return allowed[mode]
+
+
+def replace_build(stream):
+    request = stream_header(stream)
+    world_id = request['worldId']
+    directories = transfer_mode(request['mode'])
+    get_world(world_id)
+    require_stopped(world_id)
+    with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
+        stage = Path(temporary) / 'new'
+        count, mods = receive_build(stream, request, stage, directories)
+        if not count or ('world' in directories and not (stage / 'world' / 'level.dat').is_file()):
+            raise ControllerError('В выбранном переносе нет файлов или сохранения level.dat')
+        if request['mode'] != 'world' and not any((stage / name).is_dir() for name in BUILD_DIRS):
+            raise ControllerError('В выбранном переносе отсутствуют файлы сборки')
+        with (ROOT / 'control.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            world = get_world(world_id)
+            require_stopped(world_id)
+            compatibility = request.get('compatibility')
+            if compatibility and any(compatibility.get(key, default) != world.get(key, default)
+                                     for key, default in [('minecraftVersion', ''), ('loader', 'vanilla'), ('loaderVersion', '')]):
+                raise ControllerError('Для замены сборки выберите ту же версию Minecraft и загрузчика')
+            skipped = []
+            for mod in (stage / 'mods').glob('*.jar'):
+                if client_only_mod(mod, world.get('loader', 'vanilla')):
+                    skipped.append(mod.name)
+                    mod.unlink()
+            root = ensure_workspace(world)
+            level = level_folder(root)
+            with directory_fd(root) as fd:
+                owner = os.fstat(fd)
+            for child in [stage, *stage.rglob('*')]:
+                os.chown(child, owner.st_uid, owner.st_gid, follow_symlinks=False)
+            folder, detail = trash_directory(world, 'transfer')
+            detail.update(mode=request['mode'], modCount=world.get('modCount', 0), sourceId=world.get('sourceId', ''))
+            backups, new = [], []
+            for name in sorted(directories):
+                target = root / (level if name == 'world' else name)
+                if target.is_symlink():
+                    raise ControllerError('Заменяемая папка является ссылкой: ' + target.name)
+                backups.append((target, folder / name))
+                new.append((stage / name, target))
+            config = WORLDS / (world_id + '.json')
+            original = config.read_bytes()
+            def commit():
+                if request['mode'] != 'world':
+                    world['modCount'] = mods - len(skipped)
+                    world['sourceId'] = request.get('sourceId', '')
+                    json_file(config, world)
+                try:
+                    json_file(folder / 'entry.json', detail)
+                except OSError:
+                    atomic_write(config, original)
+                    raise
+            move_files(backups + new, commit)
+    return {'id': world_id, 'archive': detail['id'], 'skipped': skipped}
+
+
+def upload_file(stream):
+    request = stream_header(stream)
+    parts = path_parts(request['path'])
+    length = integer(request, 'size', 0, MAX_PACK_BYTES, 'Недопустимый размер файла')
+    world = get_world(request['worldId'])
+    require_stopped(world['id'])
+    if length * 2 > shutil.disk_usage(ROOT).free:
+        raise ControllerError('На ВМ не хватает места для загрузки')
+    with tempfile.TemporaryFile(dir=ROOT) as staging:
+        copy_exact(stream, staging, length)
+        if stream.read(1):
+            raise ControllerError('Размер файла не совпал')
+        staging.seek(0)
+        with (ROOT / 'control.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            world = get_world(world['id'])
+            require_stopped(world['id'])
+            root = ensure_workspace(world)
+            with directory_fd(root) as root_fd, directory_fd(root, parts[:-1]) as fd:
+                replace_file(fd, parts[-1], lambda out: copy_exact(staging, out, length), os.fstat(root_fd),
+                             request.get('replace') is True, request.get('etag'))
+    return True
+
+
+def write_backup(zip_file, root, parts, arcname):
+    with directory_fd(root, parts) as fd:
+        for entry in os.listdir(fd):
+            if entry == 'session.lock':
+                continue
+            if arcname == 'mods' and not entry.lower().endswith(('.jar', '.jar.disabled')):
+                continue
+            info = os.stat(entry, dir_fd=fd, follow_symlinks=False)
+            child = arcname + '/' + entry
+            if stat.S_ISDIR(info.st_mode):
+                if arcname == 'mods':
+                    continue
+                write_backup(zip_file, root, parts + (entry,), child)
+            elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                with regular_file(fd, entry) as (file, _), zip_file.open(child, 'w', force_zip64=True) as target:
+                    shutil.copyfileobj(file, target, 1024 ** 2)
+
+
+def download_files(request, output):
+    world = get_world(request['worldId'])
+    if request['kind'] == 'file':
+        parts = path_parts(request['path'])
+        with directory_fd(state_path(world), parts[:-1]) as fd, regular_file(fd, parts[-1]) as (file, _):
+            shutil.copyfileobj(file, output, 1024 ** 2)
+        return
+    with (ROOT / 'control.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        require_stopped(world['id'])
+        root = ensure_workspace(world)
+        directories = transfer_mode(request['kind'])
+        level = level_folder(root)
+        if 'world' in directories and not (root / level / 'level.dat').is_file():
+            raise ControllerError('На сервере ещё нет сохранения мира')
+        with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
+            metadata = {key: world.get(key, default) for key, default in
+                        [('minecraftVersion', ''), ('loader', 'vanilla'), ('loaderVersion', '')]}
+            archive.writestr('.veyra-server.json', json.dumps(metadata))
+            for name in sorted(directories):
+                folder = level if name == 'world' else name
+                if name == 'world' or (root / folder).is_dir():
+                    write_backup(archive, root, (folder,), name)
 
 
 def varint(value):
@@ -374,8 +905,18 @@ def control(request):
         return {'protocol': PROTOCOL, 'revision': account.get('revision')}
     if action == 'snapshot':
         return snapshot(selected)
+    if action == 'trash':
+        entries = []
+        for file in TRASH.glob('*/entry.json'):
+            info = json.loads(file.read_text(encoding='utf-8'))
+            entries.append(info)
+        return sorted(entries, key=lambda item: item['time'], reverse=True)
     with (ROOT / 'control.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        if action == 'restore':
+            return restore_trash(request.get('entryId'))
+        if action == 'purge':
+            return purge_trash(request.get('entryId'))
         if action != 'create':
             world = get_world(selected)
             states_now = states()
@@ -386,6 +927,36 @@ def control(request):
             world = settings(request['settings'], world if action == 'save' else None)
             json_file(WORLDS / (world['id'] + '.json'), world)
             return {'id': world['id']}
+        if action in ('files', 'read-file', 'game-rules', 'save-rules', 'save-config', 'mkdir', 'delete-world', 'delete-server'):
+            stopped = status in ('stopped', 'error')
+            if not stopped and action in ('save-rules', 'save-config', 'mkdir', 'delete-world', 'delete-server'):
+                raise ControllerError('Остановите сервер перед изменением файлов или удалением')
+            if action == 'delete-server':
+                return delete_server(world)
+            root = ensure_workspace(world) if stopped else state_path(world)
+            if action == 'files':
+                return list_files(root, request.get('path', ''))
+            if action == 'read-file':
+                return read_file(root, request['path'])
+            if action == 'game-rules':
+                contents = property_data(root)
+                level = level_folder(root)
+                exists = (root / level / 'level.dat').is_file() and not (root / level).is_symlink()
+                return {'rules': game_rules(contents), 'etag': hashlib.sha256(contents).hexdigest(),
+                        'worldFolder': level, 'worldExists': exists}
+            if action == 'save-rules':
+                save_game_rules(root, request['rules'], request['etag'])
+                return True
+            if action == 'save-config':
+                return save_server_config(world, root, request)
+            if action == 'delete-world':
+                return delete_level(world, root)
+            parts = path_parts(request['path'])
+            with directory_fd(root, parts[:-1]) as fd, directory_fd(root) as root_fd:
+                owner = os.fstat(root_fd)
+                os.mkdir(parts[-1], mode=0o755, dir_fd=fd)
+                os.chown(parts[-1], owner.st_uid, owner.st_gid, dir_fd=fd, follow_symlinks=False)
+            return True
         if action in ('start', 'restart'):
             if status in ('starting', 'stopping'):
                 raise ControllerError('Дождитесь завершения текущей операции')
@@ -531,11 +1102,8 @@ def configure_game(world):
               'enable-rcon': 'false', 'enable-query': 'false'}
     if not properties.exists():
         values['white-list'] = 'false'
-    previous = properties.read_bytes().splitlines() if properties.exists() else []
-    pattern = re.compile(rb'^\s*([A-Za-z0-9_.-]+)\s*[:=]')
-    kept = [line for line in previous if not (match := pattern.match(line)) or match[1].decode() not in values]
-    kept.extend(f'{key}={value}'.encode() for key, value in values.items())
-    atomic_write(properties, b'\n'.join(kept) + b'\n')
+    previous = properties.read_bytes() if properties.exists() else b''
+    atomic_write(properties, merged_properties(previous, values))
     atomic_write(Path('eula.txt'), b'eula=true\n')
 
 
@@ -725,6 +1293,19 @@ def run_world(world_id):
 if __name__ == '__main__':
     if sys.argv[1:] == ['import-build']:
         response(lambda: import_build(sys.stdin.buffer))
+        sys.exit(0)
+    if sys.argv[1:] == ['replace-build']:
+        response(lambda: replace_build(sys.stdin.buffer))
+        sys.exit(0)
+    if sys.argv[1:] == ['upload-file']:
+        response(lambda: upload_file(sys.stdin.buffer))
+        sys.exit(0)
+    if sys.argv[1:] == ['download-files']:
+        try:
+            download_files(json.loads(sys.stdin.buffer.read(65537)), sys.stdout.buffer)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError, ControllerError) as error:
+            print(str(error), file=sys.stderr)
+            sys.exit(1)
         sys.exit(0)
     if len(sys.argv) == 3 and sys.argv[1] in ('prepare', 'run'):
         try:

@@ -28,7 +28,8 @@ const { ServerManager, portFree } = require('./server-manager');
 const { serverConfig, importProperties } = require('./server-config');
 const { VeyraController, endpoint } = require('./veyra-controller');
 const { inspectBuild, buildFiles } = require('./controller-build');
-const { inspectExport, exportBuild, inspectShare } = require('./build-share');
+const { readControllerArchive } = require('./controller-archive');
+const { inspectExport, resolveExport, exportBuild, inspectShare } = require('./build-share');
 const { Updater, MODES: UPDATE_MODES, newer, fileHash } = require('./updater');
 const updateConfig = require('./update-config.json');
 const { detectInstall, readInstallState, runSetup, cleanupInstall } = require('./install-mode');
@@ -42,9 +43,30 @@ try { trustSystemCertificates(); } catch (error) { certificateError = error.mess
 globalThis.fetch = readableFetch(globalThis.fetch);
 
 if (process.env.VEYRA_TEST_DATA_DIR) app.setPath('userData', path.resolve(process.env.VEYRA_TEST_DATA_DIR));
+const shareArgument = (argv, cwd) => {
+  const file = argv.find(item => !item.startsWith('-') && /\.veyra$/i.test(item) && !item.includes('\0'));
+  return file ? path.resolve(cwd, file) : '';
+};
+let pendingShareFile = shareArgument(process.argv.slice(process.defaultApp ? 2 : 1), process.cwd());
 const primaryLauncher = app.requestSingleInstanceLock();
 if (!primaryLauncher) app.quit();
-app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
+app.on('second-instance', (_event, argv, cwd) => {
+  const file = shareArgument(argv.slice(1), cwd);
+  if (file) pendingShareFile = file;
+  if (window) {
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+    if (file) broadcast({ type: 'open-share' });
+  }
+});
+app.on('open-file', (event, file) => {
+  const share = shareArgument([file], process.cwd());
+  if (!share) return;
+  event.preventDefault();
+  pendingShareFile = share;
+  if (window) broadcast({ type: 'open-share' });
+});
 // corsEnabled: трёхмерный просмотр читает пиксели скина veyra://skin/… с CORS, иначе холст считается чужим.
 protocol.registerSchemesAsPrivileged([{ scheme: 'veyra', privileges: { secure: true, standard: true, supportFetchAPI: true, corsEnabled: true } }]);
 
@@ -1867,9 +1889,10 @@ function registerIpc() {
   ipcMain.handle('launcher:controller-close', (_event, id) => controller.close(id));
   ipcMain.handle('launcher:controller-forget', (_event, id) => controller.forget(id));
   ipcMain.handle('launcher:controller-snapshot', (_event, id, world) => controller.snapshot(id, world));
-  ipcMain.handle('launcher:controller-inspect-build', (_event, id) => {
+  ipcMain.handle('launcher:controller-inspect-build', (_event, id, online) => {
     const instance = requireInstance(id);
     if (!instance.installed) throw new Error('Сначала установите сборку');
+    if (online !== true) return inspectBuild(instance);
     return inspectBuild(instance, project => content.cached('/project/' + encodeURIComponent(project)),
       hashes => modpacks.api('/version_files', { method: 'POST', body: { hashes, algorithm: 'sha1' } }));
   });
@@ -1892,6 +1915,78 @@ function registerIpc() {
         (completed, total) => progress({ phase: 'Перенос сборки на ВМ', completed, total }), operation.signal);
     } finally { endOperation(operation); }
   });
+  ipcMain.handle('launcher:controller-workspace', async (_event, host, world, action, options) => {
+    if (action === 'purge') {
+      const entries = await controller.workspace(host, '', 'trash');
+      const entry = entries.find(item => item.id === options?.entryId);
+      if (!entry) throw new Error('Запись корзины не найдена');
+      const result = await dialog.showMessageBox(window, {
+        type: 'warning', title: 'Удалить навсегда', message: 'Удалить «' + entry.name + '» из корзины ВМ?',
+        detail: 'Файлы этой записи будут удалены с диска ВМ. Восстановление из корзины станет невозможно.',
+        buttons: ['Отмена', 'Удалить навсегда'], defaultId: 0, cancelId: 0, noLink: true,
+      });
+      if (result.response !== 1) return false;
+    }
+    return controller.workspace(host, world, action, options);
+  });
+  ipcMain.handle('launcher:controller-file-save', (_event, host, world, name, text, etag) =>
+    controller.saveText(host, world, name, text, etag));
+  ipcMain.handle('launcher:controller-file-upload', async (_event, host, world, folder, replace) => {
+    if (typeof folder !== 'string') throw new Error('Выберите папку на ВМ');
+    const result = await dialog.showOpenDialog(window, { title: 'Выберите файлы для сервера', properties: ['openFile', 'multiSelections'] });
+    if (result.canceled || !result.filePaths.length) return 0;
+    let sent = 0;
+    for (const file of result.filePaths) {
+      const name = path.basename(file);
+      await controller.uploadFile(host, world, folder ? folder + '/' + name : name, file, { replace });
+      sent++;
+    }
+    return sent;
+  });
+  ipcMain.handle('launcher:controller-download', async (_event, host, world, kind, name) => {
+    const labels = { build: 'сборка', world: 'мир', both: 'сборка-и-мир' };
+    if (kind !== 'file' && !Object.hasOwn(labels, kind)) throw new Error('Неизвестный тип скачивания');
+    const raw = kind === 'file' ? path.basename(typeof name === 'string' ? name : '') :
+      (await controller.target(host, world)).name + ' - ' + labels[kind] + '.zip';
+    const safe = raw.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '');
+    const result = await dialog.showSaveDialog(window, { title: 'Сохранить с ВМ', defaultPath: safe || 'Сервер' });
+    if (result.canceled || !result.filePath) return false;
+    return controller.downloadFiles(host, world, kind, name, result.filePath);
+  });
+  ipcMain.handle('launcher:controller-replace-build', async (_event, host, world, options) => {
+    const { mode, source, instanceId, saveName, mods } = options || {};
+    if (!['build', 'world', 'both'].includes(mode) || !['library', 'zip'].includes(source)) throw new Error('Выберите тип и источник переноса');
+    let instance, filename;
+    if (source === 'library') {
+      instance = requireInstance(instanceId);
+      if (!instance.installed) throw new Error('Сначала установите сборку');
+    } else {
+      const result = await dialog.showOpenDialog(window, { title: 'Загрузить архив на ВМ', properties: ['openFile'],
+        filters: [{ name: 'Архив сервера или мира', extensions: ['zip'] }] });
+      if (result.canceled || !result.filePaths[0]) return null;
+      filename = result.filePaths[0];
+    }
+    if (instance && mode !== 'build' && !saveName) throw new Error('Выберите одиночное сохранение');
+    const operation = instance ? beginOperation('controller-transfer', instance.id) : null;
+    if (operation) operation.cancellable = true;
+    const signal = operation?.signal || new AbortController().signal;
+    let archive;
+    try {
+      if (instance) {
+        await content.recover(instance);
+        archive = await buildFiles(instance, mode === 'world' ? [] : mods, mode === 'build' ? '' : saveName,
+          mode === 'world' ? [] : undefined);
+        if (mode !== 'world') archive.compatibility = {
+          minecraftVersion: instance.minecraftVersion, loader: instance.loader, loaderVersion: instance.loaderVersion,
+        };
+      } else archive = await readControllerArchive(filename, mode);
+      return await controller.replaceBuild(host, world, mode, archive, instance?.id || '',
+        (completed, total) => progress({ phase: 'Перенос сборки на ВМ', completed, total }), signal);
+    } finally {
+      archive?.close?.();
+      if (operation) endOperation(operation);
+    }
+  });
   ipcMain.handle('launcher:controller-copy', async (_event, id, world) => {
     clipboard.writeText((await controller.target(id, world)).address);
   });
@@ -1910,41 +2005,56 @@ function registerIpc() {
   ipcMain.handle('launcher:share-inspect-export', async (_event, id) => {
     const instance = requireInstance(id);
     if (!instance.installed) throw new Error('Сначала установите сборку');
-    const mods = await inspectExport(instance, hashes => modpacks.api('/version_files', {
-      method: 'POST', body: { hashes, algorithm: 'sha1' },
-    }));
+    const mods = await inspectExport(instance);
     const token = randomUUID();
     shareExport = { token, id, mods };
-    return { token, name: instance.name, count: mods.length,
-      unresolved: mods.filter(mod => !mod.source).map(mod => ({ name: mod.name, version: mod.version })) };
+    return { token, name: instance.name, count: mods.length };
   });
-  ipcMain.handle('launcher:share-save', async (_event, token, includeMods) => {
+  ipcMain.handle('launcher:share-resolve-export', async (_event, token) => {
+    const plan = shareExport;
+    if (!plan || plan.token !== token) throw new Error('Откройте окно экспорта снова');
+    plan.resolved ||= resolveExport(plan.mods, hashes => modpacks.api('/version_files', {
+      method: 'POST', body: { hashes, algorithm: 'sha1' },
+    })).catch(() => null);
+    const mods = await plan.resolved;
+    return mods && { unresolved: mods.filter(mod => !mod.source).map(({ name, version }) => ({ name, version })) };
+  });
+  ipcMain.handle('launcher:share-save', async (_event, token, mode) => {
     const plan = shareExport;
     if (!plan || plan.token !== token) throw new Error('Откройте окно экспорта снова');
     const instance = requireInstance(plan.id);
+    if (!['all', 'missing', 'links'].includes(mode)) throw new Error('Выберите, какие моды вложить');
+    const mods = mode === 'all' ? plan.mods : await plan.resolved;
+    if (!mods) throw new Error('Моды с Modrinth не проверены. Выберите «Вложить все моды»');
     const defaultName = instance.name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '') || 'Сборка';
     const result = await dialog.showSaveDialog(window, { title: 'Сохранить сборку Veyra', defaultPath: defaultName + '.veyra',
       filters: [{ name: 'Сборка Veyra', extensions: ['veyra'] }] });
     if (result.canceled || !result.filePath) return false;
     const operation = beginOperation('share-export', instance.id);
     try {
-      await exportBuild(instance, plan.mods, includeMods === true, result.filePath);
+      await exportBuild(instance, mods, mode, result.filePath);
       shareExport = null;
       status('Файл сборки .veyra сохранён', 'success');
       return true;
     } finally { endOperation(operation); }
   });
-  ipcMain.handle('launcher:share-open', async () => {
-    const result = await dialog.showOpenDialog(window, { title: 'Открыть сборку Veyra', properties: ['openFile'],
-      filters: [{ name: 'Сборка Veyra', extensions: ['veyra'] }] });
-    if (result.canceled || !result.filePaths[0]) return null;
-    const file = result.filePaths[0];
+  const previewShare = async file => {
     const plan = await inspectShare(file);
     const token = randomUUID();
     shareImport = { token, file, plan };
     return { token, name: plan.index.name, minecraftVersion: plan.index.minecraft, loader: plan.index.loader,
       loaderVersion: plan.index.loaderVersion, count: plan.count, embedded: plan.embedded,
       unresolved: plan.unresolved.map(name => ({ name })) };
+  };
+  ipcMain.handle('launcher:share-open', async () => {
+    const result = await dialog.showOpenDialog(window, { title: 'Открыть сборку Veyra', properties: ['openFile'],
+      filters: [{ name: 'Сборка Veyra', extensions: ['veyra'] }] });
+    return result.canceled || !result.filePaths[0] ? null : previewShare(result.filePaths[0]);
+  });
+  ipcMain.handle('launcher:share-open-pending', () => {
+    const file = pendingShareFile;
+    pendingShareFile = '';
+    return file ? previewShare(file) : null;
   });
   ipcMain.handle('launcher:share-install', async (_event, token, name) => {
     const pending = shareImport;

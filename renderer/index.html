@@ -201,58 +201,128 @@
         </div>
         <section id="controller-panel" class="controller" aria-labelledby="controller-title" hidden>
           <header class="controller-head">
-            <svg class="controller-mark" viewBox="0 0 48 48" aria-hidden="true">
-              <path d="M3 6h42v12H3zm0 12h42v12H3zm0 12h42v12H3z" fill="#2f2932" stroke="#776a7d" stroke-width="2"/>
-              <path d="M7 9h34M7 21h34M7 33h34" stroke="#4a404d" stroke-width="2"/>
-              <path d="M9 12h4v3H9zm0 12h4v3H9zm0 12h4v3H9z" fill="#8eae91"/>
-              <path d="M23 12h4v4h4v4h4v-4h4v-4h4v6h-4v6h-4v6h-4v-6h-4v-6h-4z" fill="#d29a8a"/>
-            </svg>
-            <div><h1 id="controller-title">Veyra Controller<span>.</span></h1><p>Миры Minecraft на вашей ВМ с Linux</p></div>
-            <button type="button" class="button button-primary" id="controller-add-host"><svg class="icon"><use href="#i-plus"/></svg>Добавить ВМ</button>
+            <span class="creation-orbit controller-mark" aria-hidden="true"><svg class="icon"><use href="#i-server"/></svg></span>
+            <div><h1 id="controller-title">Veyra Controller<span>.</span></h1><p>Серверы Minecraft на вашей ВМ с Linux</p></div>
+            <button type="button" class="button button-secondary" id="controller-add-host"><svg class="icon"><use href="#i-plus"/></svg>Добавить ВМ</button>
           </header>
-          <div class="controller-host" id="controller-host" hidden>
-            <label class="form-field"><span>Виртуальная машина</span><select id="controller-host-select" aria-label="Виртуальная машина"></select></label>
-            <button class="button button-secondary" id="controller-attach" type="button">Подключиться</button>
-            <div class="controller-link" id="controller-link" data-state="idle"><i></i><span id="controller-link-text" role="status">Нет подключения</span></div>
-            <button class="text-button controller-forget" id="controller-forget" type="button" title="Удалить сохранённое подключение" hidden>Забыть ВМ</button>
+          <div class="controller-overview" id="controller-overview" hidden>
+            <section class="glass-card builder-card controller-host" id="controller-host" aria-labelledby="controller-host-heading">
+              <header><span class="step"><svg class="icon"><use href="#i-link"/></svg></span><div><h3 id="controller-host-heading">Виртуальная машина</h3><p class="controller-link" id="controller-link" data-state="idle"><i></i><span id="controller-link-text" role="status">Нет подключения</span></p></div></header>
+              <div class="controller-host-actions">
+                <label class="form-field"><select id="controller-host-select" aria-label="Выбрать виртуальную машину"></select></label>
+                <button class="button button-secondary" id="controller-attach" type="button">Подключиться</button>
+                <button class="button-icon" id="controller-trash-open" type="button" title="Корзина ВМ" aria-label="Корзина ВМ" hidden><svg class="icon"><use href="#i-trash"/></svg></button>
+                <button class="button-icon" id="controller-forget" type="button" title="Забыть ВМ" aria-label="Забыть ВМ" hidden><svg class="icon"><use href="#i-trash"/></svg></button>
+              </div>
+            </section>
+            <section class="glass-card builder-card controller-resources" id="controller-resources" aria-labelledby="controller-resources-heading" hidden>
+              <header><span class="step"><svg class="icon"><use href="#i-bolt"/></svg></span><div><h3 id="controller-resources-heading">Ресурсы ВМ</h3></div></header>
+              <dl class="controller-metrics">
+                <div><dt>CPU <small>за 1 мин</small></dt><dd id="controller-load"></dd><meter id="controller-load-meter" aria-label="Нагрузка относительно числа ядер"></meter></div>
+                <div><dt>ОЗУ</dt><dd id="controller-ram"></dd><meter id="controller-ram-meter" aria-label="Занятая ОЗУ"></meter></div>
+                <div><dt>Диск</dt><dd id="controller-disk"></dd><meter id="controller-disk-meter" aria-label="Занятое место на диске"></meter></div>
+              </dl>
+            </section>
           </div>
           <p class="content-error" id="controller-error" role="alert" hidden></p>
-          <section class="controller-empty" id="controller-empty">
-            <svg class="icon"><use href="#i-server"/></svg>
+          <section class="glass-card controller-empty" id="controller-empty">
+            <span class="section-icon"><svg class="icon"><use href="#i-server"/></svg></span>
             <div><h2>Подключите свою ВМ</h2><p id="controller-empty-note">Укажите адрес и данные SSH. Контроллер установится и покажет все миры на этой машине.</p></div>
           </section>
           <div id="controller-dashboard" hidden>
-            <dl class="controller-metrics" aria-label="Ресурсы ВМ">
-              <div><dt>Нагрузка CPU <small>за 1 мин</small></dt><dd id="controller-load"></dd></div>
-              <div><dt>ОЗУ</dt><dd id="controller-ram"></dd><meter id="controller-ram-meter" aria-label="Занятая ОЗУ"></meter></div>
-              <div><dt>Диск</dt><dd id="controller-disk"></dd><meter id="controller-disk-meter" aria-label="Занятое место на диске"></meter></div>
-            </dl>
-            <div class="controller-grid">
-              <section class="controller-inventory" aria-labelledby="controller-worlds-title">
-                <header><h2 id="controller-worlds-title">Миры <small id="controller-count"></small></h2><button class="text-button" type="button" id="controller-create"><svg class="icon"><use href="#i-plus"/></svg>Новый мир</button></header>
+            <section class="glass-card controller-empty controller-first-server" id="controller-no-worlds" aria-labelledby="controller-first-title" hidden>
+              <span class="creation-orbit" aria-hidden="true"><svg class="icon"><use href="#i-globe"/></svg></span>
+              <div><h2 id="controller-first-title">Первый сервер</h2><p>Перенесите готовую сборку из библиотеки или создайте сервер Minecraft с нуля.</p>
+                <button class="button create-control" id="controller-create-first" type="button"><svg class="icon"><use href="#i-plus"/></svg>Создать сервер</button>
+              </div>
+            </section>
+            <div class="controller-grid" id="controller-server-grid" hidden>
+              <section class="glass-card controller-inventory" aria-labelledby="controller-worlds-title">
+                <header><h2 id="controller-worlds-title">Серверы <small id="controller-count"></small></h2><button class="button create-control" type="button" id="controller-create"><svg class="icon"><use href="#i-plus"/></svg>Новый сервер</button></header>
                 <div class="controller-worlds" id="controller-worlds"></div>
-                <p class="controller-no-worlds" id="controller-no-worlds">Создайте первый мир на этой ВМ.</p>
               </section>
-              <section class="controller-detail" id="controller-detail" aria-labelledby="controller-world-title" hidden>
+              <section class="glass-card controller-detail" id="controller-detail" aria-labelledby="controller-world-title" hidden>
                 <header class="controller-detail-head">
                   <div><p id="controller-world-meta"></p><h2 id="controller-world-title"></h2></div>
                   <span class="controller-indicator" id="controller-world-status"><i></i><span></span></span>
                 </header>
                 <div class="controller-address"><code id="controller-address"></code><button class="text-button" id="controller-copy" type="button">Копировать</button><span id="controller-players"></span></div>
                 <div class="controller-controls">
-                  <button class="button button-primary" id="controller-start" type="button"><svg class="icon"><use href="#i-play"/></svg>Запустить</button>
+                  <label class="switch-field controller-power"><input id="controller-power" type="checkbox" role="switch" aria-label="Питание сервера" /><span class="switch-track"></span><span id="controller-power-label">Сервер выключен</span></label>
                   <button class="button button-primary" id="controller-join" type="button"><svg class="icon"><use href="#i-play"/></svg>Играть</button>
-                  <button class="button button-secondary" id="controller-stop" type="button"><svg class="icon"><use href="#i-stop"/></svg>Остановить</button>
                   <button class="text-button" id="controller-restart" type="button">Перезапустить</button>
-                  <button class="text-button" id="controller-edit" type="button">Настройки</button>
                 </div>
-                <div class="controller-terminal">
+                <div class="segmented controller-tabs" role="group" aria-label="Раздел сервера">
+                  <button type="button" data-controller-section="console" aria-pressed="true" aria-controls="controller-section-console"><svg class="icon"><use href="#i-terminal"/></svg>Консоль</button>
+                  <button type="button" data-controller-section="files" aria-pressed="false" aria-controls="controller-section-files"><svg class="icon"><use href="#i-folder"/></svg>Файлы</button>
+                  <button type="button" data-controller-section="config" aria-pressed="false" aria-controls="controller-section-config"><svg class="icon"><use href="#i-settings"/></svg>Настройки</button>
+                </div>
+                <div class="controller-terminal" id="controller-section-console">
                   <header><svg class="icon"><use href="#i-terminal"/></svg><h3>Консоль мира</h3></header>
                   <pre id="controller-log" tabindex="0" aria-label="Журнал выбранного мира"></pre>
                   <form id="controller-command-form" class="controller-command">
                     <span aria-hidden="true">›</span><input id="controller-command" aria-label="Команда Minecraft" maxlength="256" autocomplete="off" spellcheck="false" placeholder="Команда Minecraft" required />
                     <button class="button button-secondary" id="controller-send" type="submit">Отправить</button>
                   </form>
+                </div>
+                <div id="controller-section-files" class="controller-workspace" hidden>
+                  <div class="controller-storage-actions">
+                    <button class="button button-secondary" id="controller-transfer-upload" type="button"><svg class="icon"><use href="#i-plus"/></svg>Загрузить на сервер</button>
+                    <button class="button button-secondary" id="controller-transfer-download" type="button"><svg class="icon"><use href="#i-download"/></svg>Скачать ZIP</button>
+                  </div>
+                  <div class="controller-file-tools">
+                    <button class="button-icon" id="controller-file-up" type="button" aria-label="Папка выше" title="Папка выше"><svg class="icon"><use href="#i-arrow"/></svg></button>
+                    <code id="controller-file-path">/</code>
+                    <button class="text-button" id="controller-file-refresh" type="button">Обновить</button>
+                  </div>
+                  <div class="controller-file-tools controller-file-actions">
+                    <button class="text-button" id="controller-folder-add" type="button"><svg class="icon"><use href="#i-folder"/></svg>Новая папка</button>
+                    <button class="text-button" id="controller-file-upload" type="button"><svg class="icon"><use href="#i-plus"/></svg>Добавить файлы</button>
+                    <label class="switch-field"><input id="controller-file-replace" type="checkbox" role="switch" /><span class="switch-track"></span><span>Заменять одноимённые</span></label>
+                  </div>
+                  <p class="controller-help" id="controller-files-hint" role="status"></p>
+                  <div class="controller-file-list" id="controller-files-list" aria-label="Файлы сервера"></div>
+                </div>
+                <div id="controller-section-config" class="controller-workspace" hidden>
+                  <p class="controller-help" id="controller-config-hint" role="status"></p>
+                  <form id="controller-rules-form">
+                    <div class="controller-settings-grid">
+                      <section class="glass-card builder-card controller-config-card">
+                        <header><span class="step"><svg class="icon"><use href="#i-globe"/></svg></span><div><h3>Мир</h3><p id="controller-world-folder"></p></div></header>
+                        <label class="form-field"><span>Название сервера</span><input id="controller-config-name" required maxlength="48" type="text" /></label>
+                        <div id="controller-rules-world"></div>
+                      </section>
+                      <section class="glass-card builder-card controller-config-card">
+                        <header><span class="step"><svg class="icon"><use href="#i-sword"/></svg></span><div><h3>Правила</h3><p>Сложность и условия игры</p></div></header>
+                        <div id="controller-rules-rules"></div>
+                        <div class="controller-rule-switches" id="controller-rules-switches"></div>
+                      </section>
+                      <section class="glass-card builder-card controller-config-card">
+                        <header><span class="step"><svg class="icon"><use href="#i-server"/></svg></span><div><h3>Сеть</h3><p>Вход и список серверов</p></div></header>
+                        <div id="controller-rules-network"></div>
+                        <div class="field-pair">
+                          <label class="form-field"><span>Игровой порт</span><input id="controller-config-port" type="number" min="1024" max="65535" required /></label>
+                          <label class="form-field"><span>Мест для игроков</span><input id="controller-config-limit" type="number" min="1" max="100" required /></label>
+                        </div>
+                        <label class="switch-field veyra-login-switch"><input id="controller-config-auth" type="checkbox" role="switch" /><span class="switch-track"></span><span><strong>Вход через Veyra</strong><small>Вход с аккаунтом Veyra и загрузка скинов игроков.</small></span></label>
+                        <div id="controller-network-switches"></div>
+                      </section>
+                      <section class="glass-card builder-card controller-config-card">
+                        <header><span class="step"><svg class="icon"><use href="#i-bolt"/></svg></span><div><h3>Ресурсы</h3><p>Память и дальность мира</p></div></header>
+                        <label class="form-field"><span>Память Java <output id="controller-config-memory-value"></output></span><input id="controller-config-memory" type="range" min="1" step="1" /></label>
+                        <div id="controller-rules-resources"></div>
+                      </section>
+                    </div>
+                    <div class="controller-settings-footer"><button class="text-button" id="controller-rules-reset" type="button">Сбросить правила</button><button class="button button-primary" id="controller-rules-save" type="submit"><svg class="icon"><use href="#i-check"/></svg>Сохранить настройки</button></div>
+                  </form>
+                  <section class="controller-danger-zone">
+                    <h3>Хранилище</h3>
+                    <p class="controller-help">Удалённые миры и серверы можно восстановить из корзины ВМ.</p>
+                    <div class="controller-storage-actions">
+                      <button class="button button-secondary" id="controller-delete-world" type="button">Удалить мир</button>
+                      <button class="button button-danger" id="controller-delete-server" type="button">Удалить сервер</button>
+                    </div>
+                  </section>
                 </div>
               </section>
             </div>
@@ -284,11 +354,11 @@
           </form>
         </dialog>
         <dialog class="controller-dialog glass-card" id="controller-world-dialog" aria-labelledby="controller-world-dialog-title">
-          <header><h2 id="controller-world-dialog-title">Новый мир</h2><button type="button" class="modal-close" data-controller-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
+          <header><h2 id="controller-world-dialog-title">Новый сервер</h2><button type="button" class="modal-close" data-controller-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
           <form id="controller-world-form">
             <label class="form-field" id="controller-build-field"><span>Сборка из библиотеки</span><select id="controller-build-select"></select></label>
             <div class="controller-form-grid">
-              <label class="form-field"><span>Название мира</span><input id="controller-world-name" maxlength="48" required autocomplete="off" /></label>
+              <label class="form-field"><span>Название сервера</span><input id="controller-world-name" maxlength="48" required autocomplete="off" /></label>
               <label class="form-field" id="controller-version-field"><span>Версия Minecraft</span><select id="controller-world-version"></select></label>
               <label class="form-field"><span>Игровой порт</span><input id="controller-world-port" type="number" min="1024" max="65535" required /></label>
               <label class="form-field"><span>Память Java, ГБ</span><input id="controller-world-memory" type="number" min="1" required /></label>
@@ -297,14 +367,59 @@
             <div id="controller-build-content" hidden>
               <p class="controller-help" id="controller-build-hint" role="status"></p>
               <label class="form-field" id="controller-save-field" hidden><span>Одиночное сохранение</span><select id="controller-save-select"></select></label>
+              <label class="switch-field" id="controller-build-online-field" hidden><input id="controller-build-online" type="checkbox" role="switch" /><span class="switch-track"></span><span>Проверить через Modrinth</span></label>
               <details class="controller-mods" id="controller-mods" hidden><summary id="controller-mods-title"></summary><div id="controller-mods-list"></div></details>
+              <label class="switch-field" id="controller-build-all-field" hidden><input id="controller-build-all" type="checkbox" role="switch" /><span class="switch-track"></span><span>Включить непроверенные моды</span></label>
             </div>
             <label class="switch-field controller-auth"><input id="controller-world-auth" type="checkbox" role="switch" /><span class="switch-track"></span><span><strong>Режим Veyra (online mode)</strong><small>Вход через аккаунт Veyra и подгрузка скинов из профиля.</small></span></label>
             <p class="controller-help" id="controller-auth-hint"></p>
-            <div id="controller-eula-row" class="controller-eula"><label><input id="controller-eula" type="checkbox" required /> Принимаю</label> <button class="text-button" id="controller-eula-link" type="button">Minecraft EULA</button></div>
+            <div id="controller-eula-row" class="controller-eula"><label class="switch-field"><input id="controller-eula" type="checkbox" role="switch" required /><span class="switch-track"></span><span>Принимаю</span></label> <button class="text-button" id="controller-eula-link" type="button">Minecraft EULA</button></div>
             <p class="content-error" id="controller-world-error" role="alert" hidden></p>
-            <footer><button type="button" class="text-button" id="controller-upload-cancel" hidden>Отменить перенос</button><button type="button" class="text-button" data-controller-close>Отмена</button><button type="submit" class="button button-primary" id="controller-world-submit">Создать мир</button></footer>
+            <footer><button type="button" class="text-button" id="controller-upload-cancel" hidden>Отменить перенос</button><button type="button" class="text-button" data-controller-close>Отмена</button><button type="submit" class="button button-primary" id="controller-world-submit">Создать сервер</button></footer>
           </form>
+        </dialog>
+        <dialog class="controller-dialog glass-card controller-editor" id="controller-file-dialog" aria-labelledby="controller-file-title">
+          <header><h2 id="controller-file-title">Файл сервера</h2><button class="modal-close" type="button" data-workspace-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
+          <form id="controller-file-form">
+            <label class="form-field"><span>Содержимое UTF-8</span><textarea id="controller-file-text" spellcheck="false" wrap="off"></textarea></label>
+            <p class="content-error" id="controller-file-error" role="alert" hidden></p>
+            <footer><button class="text-button" type="button" data-workspace-close>Закрыть</button><button class="button button-primary" id="controller-file-save" type="submit">Сохранить</button></footer>
+          </form>
+        </dialog>
+        <dialog class="controller-dialog glass-card" id="controller-folder-dialog" aria-labelledby="controller-folder-title">
+          <header><h2 id="controller-folder-title">Новая папка</h2><button class="modal-close" type="button" data-workspace-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
+          <form id="controller-folder-form"><label class="form-field"><span>Название</span><input id="controller-folder-name" required maxlength="120" autocomplete="off" /></label>
+            <p class="content-error" id="controller-folder-error" role="alert" hidden></p><footer><button class="button button-primary" type="submit">Создать</button></footer>
+          </form>
+        </dialog>
+        <dialog class="controller-dialog glass-card" id="controller-transfer-dialog" aria-labelledby="controller-transfer-title">
+          <header><h2 id="controller-transfer-title">Перенос</h2><button class="modal-close" type="button" data-workspace-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
+          <form id="controller-transfer-form">
+            <label class="form-field"><span>Содержимое</span><select id="controller-transfer-kind"><option value="build">Сборка</option><option value="world">Мир</option><option value="both">Мир и сборка</option></select></label>
+            <label class="form-field" id="controller-transfer-source-field"><span>Источник</span><select id="controller-transfer-source"><option value="library">Библиотека лаунчера</option><option value="zip">Архив ZIP</option></select></label>
+            <label class="form-field" id="controller-transfer-build-field"><span>Сборка</span><select id="controller-transfer-build"></select></label>
+            <label class="form-field" id="controller-transfer-save-field" hidden><span>Одиночное сохранение</span><select id="controller-transfer-save"></select></label>
+            <label class="switch-field" id="controller-transfer-online-field" hidden><input id="controller-transfer-online" type="checkbox" role="switch" /><span class="switch-track"></span><span>Проверить через Modrinth</span></label>
+            <details class="controller-mods" id="controller-transfer-mods" hidden><summary id="controller-transfer-mods-title">Моды для сервера</summary><div class="controller-transfer-mod-list" id="controller-transfer-mod-list"></div></details>
+            <label class="switch-field" id="controller-transfer-all-field" hidden><input id="controller-transfer-all" type="checkbox" role="switch" /><span class="switch-track"></span><span>Включить непроверенные моды</span></label>
+            <p class="controller-help" id="controller-transfer-hint" role="status"></p>
+            <p class="content-error" id="controller-transfer-error" role="alert" hidden></p>
+            <footer><button class="text-button" type="button" data-workspace-close>Отмена</button><button class="button button-primary" id="controller-transfer-submit" type="submit">Продолжить</button></footer>
+          </form>
+        </dialog>
+        <dialog class="controller-dialog glass-card" id="controller-delete-dialog" aria-labelledby="controller-delete-title">
+          <header><h2 id="controller-delete-title"></h2><button class="modal-close" type="button" data-workspace-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
+          <form id="controller-delete-form">
+            <p class="controller-help" id="controller-delete-note"></p>
+            <p class="content-error" id="controller-delete-error" role="alert" hidden></p>
+            <footer><button class="text-button" type="button" data-workspace-close>Отмена</button><button class="button button-danger" type="submit">Переместить в корзину</button></footer>
+          </form>
+        </dialog>
+        <dialog class="controller-dialog glass-card" id="controller-trash-dialog" aria-labelledby="controller-trash-title">
+          <header><h2 id="controller-trash-title">Корзина ВМ</h2><button class="modal-close" type="button" data-workspace-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
+          <p class="controller-help" id="controller-trash-empty" hidden>Корзина пуста.</p>
+          <div class="controller-file-list" id="controller-trash-list"></div>
+          <p class="content-error" id="controller-trash-error" role="alert" hidden></p>
         </dialog>
       </section>
 
@@ -546,17 +661,31 @@
   <script src="./content.js"></script>
   <script src="./modpacks.js"></script>
   <script src="./server.js"></script>
-  <dialog class="controller-dialog glass-card" id="share-dialog" aria-labelledby="share-title">
-    <header><h2 id="share-title">Поделиться сборкой</h2><button type="button" class="modal-close" id="share-close" aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
+  <dialog class="modal share-dialog" id="share-dialog" aria-labelledby="share-title">
+    <header class="modal-head">
+      <div class="creation-heading"><span class="creation-orbit" aria-hidden="true"><svg class="icon"><use href="#i-box"/></svg></span><h2 id="share-title">Поделиться сборкой</h2></div>
+      <button type="button" class="modal-close" id="share-close" aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button>
+    </header>
     <form id="share-form">
+      <div class="recipe share-profile" id="share-profile" hidden>
+        <span class="recipe-slot"><img id="share-build-icon" src="../assets/brands/minecraft.png" alt="" /></span>
+        <div><strong id="share-build-title"></strong><span id="share-build-version"></span></div>
+      </div>
       <p class="controller-help" id="share-summary" role="status"></p>
       <label class="form-field" id="share-name-field" hidden><span>Название сборки</span><input id="share-name" maxlength="40" autocomplete="off" /></label>
       <details class="controller-mods" id="share-missing" hidden><summary id="share-missing-title"></summary><ul id="share-missing-list"></ul></details>
-      <label class="switch-field controller-auth" id="share-embed-field" hidden><input id="share-embed" type="checkbox" role="switch" /><span class="switch-track"></span><span><strong>Добавить моды в файл</strong><small>Встроить JAR, чьи версии не найдены на Modrinth.</small></span></label>
+      <label class="switch-field controller-auth" id="share-all-field" hidden><input id="share-all" type="checkbox" role="switch" /><span class="switch-track"></span><span><strong>Вложить все моды</strong><small>JAR из сборки попадут в архив. Для экспорта и получения модов Modrinth не нужен.</small></span></label>
+      <label class="switch-field controller-auth" id="share-embed-field" hidden><input id="share-embed" type="checkbox" role="switch" /><span class="switch-track"></span><span><strong>Вложить ненайденные моды</strong><small>Для остальных модов в архиве будут ссылки на Modrinth.</small></span></label>
+      <div class="progress-box share-install-status" id="share-install-status" hidden>
+        <div class="progress-head"><strong id="share-install-phase">Подготовка</strong><span id="share-install-percent"></span></div>
+        <div class="progress-track" id="share-install-progress" role="progressbar" aria-label="Установка сборки" aria-valuemin="0" aria-valuemax="100"><span id="share-install-fill"></span></div>
+        <div class="progress-foot" id="share-install-message" hidden></div>
+      </div>
       <p class="content-error" id="share-error" role="alert" hidden></p>
-      <footer><button type="button" class="text-button" id="share-cancel">Отмена</button><button type="submit" class="button button-primary" id="share-submit">Сохранить .veyra</button></footer>
+      <footer class="modal-actions share-actions"><button type="button" class="button button-secondary" id="share-install-cancel" hidden><svg class="icon"><use href="#i-stop"/></svg>Остановить</button><button type="button" class="button button-secondary" id="share-cancel">Отмена</button><button type="submit" class="button button-primary" id="share-submit"><span id="share-submit-label">Сохранить .veyra</span><svg class="icon"><use href="#i-arrow"/></svg></button></footer>
     </form>
   </dialog>
+  <script src="./controller-workspace.js"></script>
   <script src="./controller.js"></script>
   <script src="./build-share.js"></script>
   <script src="./extras.js"></script>

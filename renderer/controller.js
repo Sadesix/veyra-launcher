@@ -11,10 +11,19 @@
   const hosts = { list: [], selected: '', connected: '' };
   const rows = new Map();
   let snapshot, worldId = '', busy = false, refreshing = false, degraded = false, logText = '', lastLogWorld = '', connectionRevision = 0;
-  let keyFile = '', trust = '', editing = '', copyTimer;
+  let keyFile = '', trust = '', copyTimer;
   let builds = [], buildScan = 0, autoName = '';
   const world = () => snapshot?.worlds.find(item => item.id === worldId);
   const visible = () => !panel.hidden && !document.getElementById('server-page').hidden && !document.hidden;
+  const workspace = window.veyraControllerWorkspace({
+    context: () => ({ host: hosts.connected, world: world(), busy, degraded, ram: snapshot?.vm.ramTotal || 0 }),
+    task, message,
+    reload: async selected => {
+      const result = await api.controllerSnapshot(hosts.connected, selected || worldId);
+      if (selected) worldId = selected;
+      apply(result);
+    },
+  });
 
   function message(target, text = '') {
     const node = el(target);
@@ -59,6 +68,7 @@
   }
 
   function selectWorld(id) {
+    if (busy) return;
     worldId = id;
     el('command').value = '';
     render();
@@ -104,6 +114,7 @@
     }
     el('count').textContent = snapshot.worlds.length;
     el('no-worlds').hidden = snapshot.worlds.length > 0;
+    el('server-grid').hidden = snapshot.worlds.length === 0;
   }
 
   function renderLog(item, details) {
@@ -119,35 +130,41 @@
 
   function render() {
     status();
-    el('host').hidden = !hosts.list.length;
+    el('overview').hidden = !hosts.list.length;
+    el('overview').classList.toggle('has-resources', Boolean(snapshot));
+    el('resources').hidden = !snapshot;
     el('add-host').disabled = busy;
+    el('add-host').classList.toggle('button-primary', hosts.list.length === 0);
+    el('add-host').classList.toggle('button-secondary', hosts.list.length > 0);
     el('host-select').disabled = busy || !hosts.list.length;
     el('attach').disabled = busy || !hosts.selected;
     el('attach').textContent = hosts.connected ? (degraded ? 'Переподключить' : 'Отключиться') : 'Подключиться';
+    el('attach').classList.toggle('button-primary', !hosts.connected || degraded);
+    el('attach').classList.toggle('button-secondary', Boolean(hosts.connected) && !degraded);
     el('forget').hidden = !hosts.selected || Boolean(hosts.connected);
     el('forget').disabled = busy;
     el('empty').hidden = Boolean(snapshot);
     el('empty-note').textContent = hosts.list.length ?
-      'Выберите сохранённую ВМ и нажмите «Подключиться», чтобы открыть её миры.' :
-      'Укажите адрес и данные SSH. Контроллер установится и покажет все миры на этой машине.';
+      'Выберите сохранённую ВМ, чтобы открыть её серверы.' :
+      'Укажите адрес и данные SSH. Veyra установит контроллер на вашу ВМ.';
     el('dashboard').hidden = !snapshot;
+    workspace.render();
     if (!snapshot) return;
     const vm = snapshot.vm;
     el('load').textContent = vm.load.toLocaleString('ru') + ' / ' + vm.cpuCount;
-    for (const [name, used, total] of [['ram', vm.ramUsed, vm.ramTotal], ['disk', vm.diskUsed, vm.diskTotal]]) {
-      el(name).textContent = size(used) + ' / ' + size(total) + ' ГБ';
+    for (const [name, used, total] of [['load', vm.load, vm.cpuCount], ['ram', vm.ramUsed, vm.ramTotal], ['disk', vm.diskUsed, vm.diskTotal]]) {
+      if (name !== 'load') el(name).textContent = size(used) + ' / ' + size(total) + ' ГБ';
       const meter = el(name + '-meter');
       meter.max = total;
       meter.high = total * 0.85;
-      meter.value = used;
+      meter.value = Math.min(used, total);
     }
-    el('create').disabled = busy || degraded;
+    el('create').disabled = el('create-first').disabled = busy || degraded;
     updateWorlds();
     const item = world();
     el('detail').hidden = !item;
     if (!item) return;
     const ready = item.status === 'ready';
-    const stopped = ['stopped', 'error'].includes(item.status);
     const details = snapshot.details?.id === item.id ? snapshot.details : null;
     el('world-title').textContent = item.name;
     el('world-meta').textContent = (loaders[item.loader] || 'Vanilla') + ' ' + item.minecraftVersion +
@@ -157,11 +174,11 @@
     el('world-status').dataset.status = degraded ? 'stopped' : item.status;
     el('world-status').lastElementChild.textContent = degraded ? 'Нет свежих данных' : labels[item.status];
     el('players').textContent = Number.isInteger(details?.players) && !degraded ? 'Игроки ' + details.players + ' / ' + item.maxPlayers : '';
-    el('start').hidden = !stopped;
-    el('stop').hidden = !ready && item.status !== 'starting';
+    el('power').checked = ready || item.status === 'starting';
+    el('power').disabled = busy || degraded || item.status === 'stopping';
+    el('power-label').textContent = ready || item.status === 'starting' ? 'Сервер включён' : item.status === 'stopping' ? 'Останавливается…' : 'Сервер выключен';
     el('restart').hidden = el('join').hidden = !ready;
-    el('edit').disabled = busy || degraded || !stopped;
-    for (const name of ['start', 'stop', 'restart', 'copy', 'join']) el(name).disabled = busy || degraded;
+    for (const name of ['restart', 'copy', 'join']) el(name).disabled = busy || degraded;
     el('command').disabled = el('send').disabled = degraded || !ready;
     el('send').disabled ||= busy;
     renderLog(item, details);
@@ -266,8 +283,7 @@
   }
 
   function authHint() {
-    el('auth-hint').textContent = editing ? 'Смена режима меняет UUID игроков. Инвентари, привязанные к прежним UUID, остаются в файлах мира.' :
-      el('world-auth').checked ? '' : 'Локальный ник доступен без проверки аккаунта. Используйте этот режим для закрытых игр.';
+    el('auth-hint').textContent = el('world-auth').checked ? '' : 'Локальный ник доступен без проверки аккаунта. Используйте этот режим для закрытых игр.';
     el('auth-hint').hidden = !el('auth-hint').textContent;
   }
 
@@ -278,6 +294,7 @@
     el('world-version').required = !build;
     el('build-content').hidden = !build;
     el('save-field').hidden = el('mods').hidden = true;
+    el('build-online-field').hidden = el('build-all-field').hidden = true;
     el('mods').open = false;
     el('mods-list').replaceChildren();
     el('save-select').replaceChildren(new Option('Создать новый мир', ''));
@@ -301,27 +318,26 @@
     el('world-submit').disabled = true;
     el('build-hint').textContent = 'Проверяем моды и сохранения…';
     try {
-      const result = await api.controllerInspectBuild(build.id);
+      const result = await api.controllerInspectBuild(build.id, el('build-online').checked);
       if (request !== buildScan || !el('world-dialog').open) return;
       el('build-hint').textContent = (loaders[build.loader] || build.loader) + ' ' + build.minecraftVersion +
         (build.loaderVersion ? ' · ' + build.loaderVersion : '') + '. Конфиги будут скопированы на ВМ.';
       for (const name of result.worlds) el('save-select').add(new Option(name, name));
       el('save-field').hidden = !result.worlds.length;
       el('mods').hidden = !result.mods.length;
+      el('build-online-field').hidden = !result.mods.length;
+      el('build-all-field').hidden = !result.mods.some(mod => mod.supported && !mod.verified);
       const refreshCount = () => {
         const checked = el('mods-list').querySelectorAll('input:checked').length;
         el('mods-title').textContent = 'Моды для сервера · ' + checked + ' из ' + result.mods.length;
       };
       for (const mod of result.mods) {
-        const label = document.createElement('label');
-        const input = document.createElement('input');
-        input.type = 'checkbox'; input.value = mod.name; input.disabled = !mod.supported; input.checked = mod.verified;
+        const note = !mod.supported ? 'Только для клиента' : !mod.verified ? 'Совместимость неизвестна · можно выбрать вручную' : '';
+        const { input, label } = window.veyraControllerSwitch(mod.name, note);
+        const unknown = mod.supported && !mod.verified;
+        if (unknown) input.dataset.unknown = '';
+        input.value = mod.name; input.disabled = !mod.supported; input.checked = mod.verified || (unknown && el('build-all').checked);
         input.addEventListener('change', refreshCount);
-        const name = document.createElement('span');
-        name.textContent = mod.name;
-        const note = document.createElement('small');
-        note.textContent = !mod.supported ? 'Только для клиента' : !mod.verified ? 'Совместимость неизвестна · можно выбрать вручную' : '';
-        label.append(input, name, note);
         el('mods-list').append(label);
       }
       refreshCount();
@@ -339,35 +355,26 @@
       .map(item => new Option(item.id, item.id)));
   }
 
-  async function worldForm(item) {
+  async function worldForm() {
     const form = el('world-form');
     form.reset();
-    editing = item?.id || '';
     buildScan++;
     autoName = '';
-    el('world-dialog-title').textContent = editing ? 'Настройки мира' : 'Новый мир';
-    el('world-submit').textContent = editing ? 'Сохранить' : 'Создать мир';
-    el('world-name').value = item?.name || '';
-    el('world-port').value = item?.port || freePort();
+    el('world-port').value = freePort();
     const maxMemory = Math.max(1, Math.floor(snapshot.vm.ramTotal / 1024 ** 3));
     el('world-memory').max = maxMemory;
-    el('world-memory').value = item?.memoryGb || Math.min(2, maxMemory);
-    el('world-limit').value = item?.maxPlayers || 8;
-    el('world-auth').checked = item?.veyraLogin ?? true;
-    el('eula-row').hidden = Boolean(editing);
-    el('eula').required = !editing;
-    el('build-field').hidden = Boolean(editing);
-    el('build-content').hidden = el('version-field').hidden = Boolean(editing);
+    el('world-memory').value = Math.min(2, maxMemory);
+    el('world-limit').value = 8;
+    el('world-auth').checked = true;
+    el('build-content').hidden = true;
     el('world-version').required = false;
-    if (!editing) {
-      const data = await api.getState();
-      builds = data.instances.filter(build => build.installed);
-      const picker = el('build-select');
-      picker.replaceChildren(new Option('Новая Vanilla', ''), ...builds.map(build =>
-        new Option(build.name + ' · ' + loaders[build.loader] + ' ' + build.minecraftVersion, build.id)));
-      picker.value = builds.some(build => build.id === data.settings.selectedInstanceId) ? data.settings.selectedInstanceId : builds[0]?.id || '';
-      fillVersions(data.versions);
-    }
+    const data = await api.getState();
+    builds = data.instances.filter(build => build.installed);
+    const picker = el('build-select');
+    picker.replaceChildren(new Option('Новая Vanilla', ''), ...builds.map(build =>
+      new Option(build.name + ' · ' + loaders[build.loader] + ' ' + build.minecraftVersion, build.id)));
+    picker.value = builds.some(build => build.id === data.settings.selectedInstanceId) ? data.settings.selectedInstanceId : builds[0]?.id || '';
+    fillVersions(data.versions);
     authHint();
     message('world-error');
     el('world-dialog').showModal();
@@ -442,11 +449,19 @@
       }
     }, 'host-error');
   });
-  el('create').addEventListener('click', () => task(() => worldForm(null)).then(() => { if (el('world-dialog').open) selectBuild(); }));
-  el('edit').addEventListener('click', () => task(() => worldForm(world())));
+  function newServer() { task(worldForm).then(() => { if (el('world-dialog').open) selectBuild(); }); }
+  el('create').addEventListener('click', newServer);
+  el('create-first').addEventListener('click', newServer);
   el('eula-link').addEventListener('click', () => api.openServerEula().catch(error => message('world-error', error.message)));
   el('world-auth').addEventListener('change', authHint);
   el('build-select').addEventListener('change', selectBuild);
+  el('build-online').addEventListener('change', selectBuild);
+  el('build-all').addEventListener('change', () => {
+    for (const input of el('mods-list').querySelectorAll('input[data-unknown]')) {
+      input.checked = el('build-all').checked;
+      input.dispatchEvent(new Event('change'));
+    }
+  });
   el('upload-cancel').addEventListener('click', () => api.cancelOperation().catch(error => message('world-error', error.message)));
   api.onEvent(event => {
     if (event.type === 'progress' && event.phase === 'Перенос сборки на ВМ' && !el('upload-cancel').hidden) {
@@ -457,26 +472,30 @@
     event.preventDefault();
     task(async () => {
       setDialogBusy(el('world-dialog'), true);
-      const uploading = !editing && Boolean(el('build-select').value);
+      const uploading = Boolean(el('build-select').value);
       el('upload-cancel').hidden = !uploading;
       el('upload-cancel').disabled = false;
       if (uploading) el('world-submit').textContent = 'Готовим сборку…';
       try {
-        await changeWorld(editing ? 'save' : 'create', editing, { name: el('world-name').value,
+        await changeWorld('create', '', { name: el('world-name').value,
           minecraftVersion: el('world-version').value, port: Number(el('world-port').value),
           memoryGb: Number(el('world-memory').value), maxPlayers: Number(el('world-limit').value),
           veyraLogin: el('world-auth').checked, eula: el('eula').checked,
           saveName: el('save-select').value, mods: [...el('mods-list').querySelectorAll('input:checked')].map(input => input.value) });
       } finally {
         el('upload-cancel').hidden = true;
-        el('world-submit').textContent = editing ? 'Сохранить' : 'Создать мир';
+        el('world-submit').textContent = 'Создать сервер';
       }
       setDialogBusy(el('world-dialog'), false);
       el('world-dialog').close();
-      el('start').focus();
+      el('power').focus();
     }, 'world-error');
   });
-  for (const action of ['start', 'stop', 'restart']) el(action).addEventListener('click', () => task(() => changeWorld(action, worldId)));
+  el('power').addEventListener('change', event => {
+    const action = event.target.checked ? 'start' : 'stop';
+    task(() => changeWorld(action, worldId));
+  });
+  el('restart').addEventListener('click', () => task(() => changeWorld('restart', worldId)));
   el('join').addEventListener('click', () => task(() => api.controllerJoin(hosts.connected, worldId)));
   el('copy').addEventListener('click', () => task(async () => {
     await api.controllerCopy(hosts.connected, worldId);

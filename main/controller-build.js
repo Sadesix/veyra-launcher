@@ -47,7 +47,7 @@ async function inspectBuild(instance, lookup, lookupHashes) {
   for (let offset = 0; offset < inspected.length; offset += 12) {
     mods.push(...await Promise.all(inspected.slice(offset, offset + 12).map(async ({ name, declared, projectId, sha1 }) => {
       const id = projectId || versions.get(sha1);
-      if (id && declared !== 'unsupported' && !projects.has(id)) {
+      if (lookup && id && declared !== 'unsupported' && !projects.has(id)) {
         projects.set(id, lookup(id).then(project => project?.server_side, () => ''));
       }
       const side = await projects.get(id);
@@ -106,14 +106,16 @@ async function buildFiles(instance, mods = [], worldName = '', directories = CON
   return { files, total };
 }
 
-async function* buildStream(settings, { files, total }, progress, signal) {
-  yield JSON.stringify({ settings, count: files.length, total }) + '\n';
+async function* buildStream(header, { files, total }, progress, signal) {
+  yield JSON.stringify({ ...header, count: files.length, total }) + '\n';
   let completed = 0;
   for (const file of files) {
     signal.throwIfAborted();
     yield JSON.stringify({ path: file.remote, size: file.size }) + '\n';
     let sent = 0;
-    for await (const bytes of createReadStream(file.local, { signal })) {
+    const source = file.open ? await file.open() : createReadStream(file.local, { signal });
+    for await (const bytes of source) {
+      signal.throwIfAborted();
       sent += bytes.length;
       if (sent > file.size) throw new Error('Во время отправки изменился файл ' + path.basename(file.local));
       yield bytes;

@@ -1,14 +1,16 @@
 const fs = require('node:fs/promises');
+const { createReadStream, createWriteStream } = require('node:fs');
 const path = require('node:path');
 const { domainToASCII } = require('node:url');
 const { isIP } = require('node:net');
 const { createHash, randomUUID } = require('node:crypto');
 const { Client } = require('ssh2');
 const { Readable } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 const { AccountVault } = require('./account-vault');
 const accountConfig = require('./account-config.json');
 
-const PROTOCOL = 2;
+const PROTOCOL = 3;
 const entry = '/usr/local/lib/veyra-controller/controller.py';
 const python = '/usr/bin/python3 -I';
 const installCode = [
@@ -105,12 +107,12 @@ async function openSsh(profile, { expected, probe = false } = {}) {
   });
 }
 
-function execute(client, command, value, input, signal) {
+function execute(client, command, value, input, signal, destination) {
   return new Promise((resolve, reject) => {
     let channel;
     let source;
     let completed = false;
-    const timer = setTimeout(() => finish(new Error('ВМ не ответила вовремя')), 35000);
+    const timer = setTimeout(() => finish(new Error('ВМ не ответила вовремя')), input || destination ? 120000 : 35000);
     const cancel = () => finish(signal.reason);
     function finish(error, result) {
       if (completed) return;
@@ -129,7 +131,10 @@ function execute(client, command, value, input, signal) {
       const chunks = [];
       let stderr = '', size = 0;
       stream.on('error', finish);
+      const saved = destination ? pipeline(stream, createWriteStream(destination, { flags: 'wx' })) : null;
+      saved?.catch(finish);
       stream.on('data', chunk => {
+        if (saved) { timer.refresh(); return; }
         size += chunk.length;
         if (size > 16 * 1024 * 1024) return finish(new Error('Контроллер прислал слишком большой ответ'));
         chunks.push(chunk);
@@ -145,6 +150,7 @@ function execute(client, command, value, input, signal) {
           finish(new Error(signal ? message + ' (' + signal + ')' : message));
           return;
         }
+        if (saved) { saved.then(() => finish(null, true), finish); return; }
         let reply;
         try { reply = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
         catch { finish(new Error('Контроллер вернул некорректный ответ')); return; }
@@ -331,7 +337,59 @@ class VeyraController {
     const client = await this.connection(profile);
     const prefix = profile.username === 'root' ? '' : 'sudo -n ';
     return execute(client, prefix + python + ' ' + entry + ' import-build', null,
-      buildStream(settings, files, progress, signal), signal);
+      buildStream({ settings }, files, progress, signal), signal);
+  }
+
+  workspace(id, worldId, action, options = {}) {
+    if (!['files', 'read-file', 'game-rules', 'save-rules', 'save-config', 'mkdir', 'delete-world', 'delete-server', 'trash', 'restore', 'purge'].includes(action)) {
+      throw new Error('Неизвестное действие файловой панели');
+    }
+    if (!['trash', 'restore', 'purge'].includes(action) && !validWorld(worldId)) throw new Error('Выберите сервер');
+    if (action === 'save-config') options = { ...options, settings: worldSettings(options.settings, false) };
+    return this.request(id, { ...options, action, worldId });
+  }
+
+  async fileChannel(id, action, value, input, signal, destination) {
+    if (!validWorld(value.worldId)) throw new Error('Выберите сервер');
+    const profile = await this.profile(id);
+    const prefix = profile.username === 'root' ? '' : 'sudo -n ';
+    return execute(await this.connection(profile), prefix + python + ' ' + entry + ' ' + action,
+      value, input, signal, destination);
+  }
+
+  async uploadFile(id, worldId, name, file, options) {
+    const { size } = await fs.stat(file);
+    const header = { path: name, worldId, size, replace: options.replace === true };
+    async function* input() {
+      yield JSON.stringify(header) + '\n';
+      yield* createReadStream(file);
+    }
+    return this.fileChannel(id, 'upload-file', header, input());
+  }
+
+  saveText(id, worldId, name, text, etag) {
+    if (typeof text !== 'string' || typeof etag !== 'string' || !/^[\da-f]{64}$/.test(etag)) throw new Error('Откройте файл перед сохранением');
+    const bytes = Buffer.from(text);
+    if (bytes.length > 1024 * 1024 || bytes.includes(0)) throw new Error('Сохранять можно текст UTF-8 до 1 МБ');
+    const header = { path: name, worldId, size: bytes.length, replace: true, etag };
+    return this.fileChannel(id, 'upload-file', header, [JSON.stringify(header) + '\n', bytes]);
+  }
+
+  async downloadFiles(id, worldId, kind, name, output) {
+    const temporary = output + '.veyra-part-' + randomUUID();
+    try {
+      await this.fileChannel(id, 'download-files', { worldId, kind, path: name }, null, null, temporary);
+      await fs.rename(temporary, output);
+      return true;
+    } finally {
+      await fs.rm(temporary, { force: true }).catch(() => {});
+    }
+  }
+
+  async replaceBuild(id, worldId, mode, archive, sourceId, progress, signal) {
+    const { buildStream } = require('./controller-build');
+    const header = { worldId, mode, compatibility: archive.compatibility, sourceId };
+    return this.fileChannel(id, 'replace-build', header, buildStream(header, archive, progress, signal), signal);
   }
 
   async target(id, worldId) {

@@ -54,6 +54,7 @@ function makePack(file, index = baseIndex, extra = overrides) {
 // Разбор и распаковка идут под Node из Electron, как в самом лаунчере.
 async function unit() {
   const { readIndex, inspectPack, applyPack, packRecord, packPath } = require('../main/modpacks');
+  const { inspectExport, resolveExport, exportBuild, inspectShare } = require('../main/build-share');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'veyra-modpack-unit-'));
   try {
     for (const bad of ['../evil.jar', 'mods/../../evil.jar', '/evil.jar', 'C:/evil.jar', 'mods\\evil.jar', '.veyra-content.json', 'mods/.veyra-x/a.jar', 'mods/con.jar', 'mods/evil.jar.', 'mods//evil.jar', 'mods/ev:il.jar']) assert.throws(() => packPath(bad), /Недопустимый путь/, bad);
@@ -133,6 +134,35 @@ async function unit() {
     const applied = packRecord({ source: 'modrinth', projectId: 'VtPack01', versionId: 'VtVer001', state: 'applied', file, title: 'T', icon: 'https://evil.example/icon.png' });
     assert.equal(applied.file, null); assert.equal(applied.icon, '');
     process.stdout.write('OK: .mrpack — пути, хеши, ссылки, докачка, overrides, отмена\n');
+
+    const instance = { directory: game, name: 'Offline pack', minecraftVersion: '1.20.1', loader: 'fabric', loaderVersion: '0.16.10' };
+    fs.writeFileSync(path.join(game, files.beta.path + '.disabled'), files.beta.bytes);
+    const mods = await inspectExport(instance);
+    await assert.rejects(resolveExport(mods, async () => { throw new Error('UND_ERR_CONNECT_TIMEOUT'); }), /UND_ERR_CONNECT_TIMEOUT/);
+    const share = path.join(directory, 'offline.veyra');
+    await exportBuild(instance, mods, 'all', share);
+    const offline = await inspectShare(share);
+    assert.equal(offline.embedded, 2);
+    assert.deepEqual(offline.index.files, []);
+    const restored = path.join(directory, 'restored');
+    fs.mkdirSync(restored);
+    await applyPack(share, offline.index, restored, { fetch: () => assert.fail('Автономный архив попытался скачать мод'), agent: 'VeyraTest' });
+    assert.deepEqual(fs.readFileSync(path.join(restored, files.alpha.path)), files.alpha.bytes);
+    assert.deepEqual(fs.readFileSync(path.join(restored, files.beta.path + '.disabled')), files.beta.bytes);
+    assert.equal(fs.readFileSync(path.join(restored, 'config', 'alpha.toml'), 'utf8'), 'speed = 3\n');
+
+    const alpha = mods.find(mod => mod.name === 'alpha.jar');
+    const resolved = await resolveExport(mods, async () => ({
+      [alpha.sha1]: { version_number: '1.4.0', id: 'AlphaV01', project_id: 'AlphaP01',
+        files: [{ url: files.alpha.url, size: alpha.size, hashes: { sha1: alpha.sha1 } }] },
+    }));
+    const hybrid = path.join(directory, 'hybrid.veyra');
+    await exportBuild(instance, resolved, 'missing', hybrid);
+    const mixed = await inspectShare(hybrid);
+    assert.equal(mixed.embedded, 1);
+    assert.deepEqual(mixed.index.files.map(mod => mod.path), ['mods/alpha.jar']);
+    assert.deepEqual(mixed.unresolved, []);
+    process.stdout.write('OK: .veyra — автономный архив сохраняет отключённые моды и настройки, смешанный использует точную ссылку\n');
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }
 

@@ -34,7 +34,7 @@ async function declaredVersion(file) {
   finally { zip?.close(); }
 }
 
-async function inspectExport(instance, lookup) {
+async function inspectExport(instance) {
   const root = path.join(instance.directory, 'mods');
   const mods = [];
   const directory = await fs.lstat(root).catch(error => { if (error.code !== 'ENOENT') throw error; });
@@ -46,25 +46,32 @@ async function inspectExport(instance, lookup) {
       const file = path.join(root, entry.name);
       const info = await fs.stat(file);
       if (info.size > LIMITS.file || mods.length >= LIMITS.files) throw new Error('Превышен лимит размера или количества модов .veyra');
-      mods.push({ name: entry.name, file, size: info.size, modified: info.mtimeMs, sha1: await hash(file) });
+      mods.push({ name: entry.name, file, size: info.size, modified: info.mtimeMs,
+        sha1: await hash(file), version: await declaredVersion(file), source: null });
     }
-  }
-  const versions = {};
-  for (let offset = 0; offset < mods.length; offset += 200) {
-    Object.assign(versions, await lookup([...new Set(mods.slice(offset, offset + 200).map(mod => mod.sha1))]));
-  }
-  for (const mod of mods) {
-    const version = versions[mod.sha1];
-    const artifact = version?.files?.find(file => file.hashes?.sha1 === mod.sha1 && file.size === mod.size && /^https:\/\/cdn\.modrinth\.com\//.test(file.url));
-    mod.version = String(version?.version_number || await declaredVersion(mod.file)).slice(0, 100);
-    mod.source = artifact ? { url: artifact.url, versionId: version.id, projectId: version.project_id } : null;
   }
   return mods;
 }
 
-async function exportBuild(instance, mods, embedded, destination) {
+async function resolveExport(mods, lookup) {
+  const versions = {};
+  for (let offset = 0; offset < mods.length; offset += 200) {
+    Object.assign(versions, await lookup([...new Set(mods.slice(offset, offset + 200).map(mod => mod.sha1))]));
+  }
+  return mods.map(mod => {
+    const version = versions[mod.sha1];
+    const artifact = version?.files?.find(file => file.hashes?.sha1 === mod.sha1 && file.size === mod.size && /^https:\/\/cdn\.modrinth\.com\//.test(file.url));
+    return {
+      ...mod, version: String(version?.version_number || mod.version).slice(0, 100),
+      source: artifact ? { url: artifact.url, versionId: version.id, projectId: version.project_id } : null,
+    };
+  });
+}
+
+async function exportBuild(instance, mods, mode, destination) {
   const config = await buildFiles(instance, [], '', SHARED_DIRS);
-  const binaries = mods.filter(mod => embedded && !mod.source);
+  const binaries = mods.filter(mod => mode === 'all' || (mode === 'missing' && !mod.source));
+  const included = new Set(binaries);
   if (config.files.length + binaries.length + 2 > LIMITS.entries ||
     config.total + binaries.reduce((sum, mod) => sum + mod.size, 0) > LIMITS.overrides) {
     throw new Error('Сборка превышает лимит архива .veyra (4 ГБ файлов)');
@@ -78,10 +85,10 @@ async function exportBuild(instance, mods, embedded, destination) {
   const dependencies = { minecraft: instance.minecraftVersion };
   if (instance.loader !== 'vanilla') dependencies[instance.loader === 'fabric' ? 'fabric-loader' : instance.loader] = instance.loaderVersion;
   const index = { formatVersion: 1, game: 'minecraft', name: instance.name, versionId: 'veyra-1', dependencies,
-    files: mods.filter(mod => mod.source).map(mod => ({ path: 'mods/' + mod.name, hashes: { sha1: mod.sha1 },
+    files: mods.filter(mod => mod.source && !included.has(mod)).map(mod => ({ path: 'mods/' + mod.name, hashes: { sha1: mod.sha1 },
       fileSize: mod.size, downloads: [mod.source.url] })) };
   const descriptor = { format: 1, note: instance.note, mods: mods.map(mod => ({
-    name: mod.name, version: mod.version, sha1: mod.sha1, source: mod.source, embedded: embedded && !mod.source,
+    name: mod.name, version: mod.version, sha1: mod.sha1, source: included.has(mod) ? null : mod.source, embedded: included.has(mod),
   })) };
   readIndex(index);
   const temporary = destination + '.part-' + randomUUID();
@@ -161,4 +168,4 @@ async function inspectShare(file) {
   } finally { zip.close(); }
 }
 
-module.exports = { inspectExport, exportBuild, inspectShare };
+module.exports = { inspectExport, resolveExport, exportBuild, inspectShare };
