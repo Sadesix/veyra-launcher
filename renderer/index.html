@@ -378,12 +378,13 @@
             <footer><button type="button" class="text-button" id="controller-upload-cancel" hidden>Отменить перенос</button><button type="button" class="text-button" data-controller-close>Отмена</button><button type="submit" class="button button-primary" id="controller-world-submit">Создать сервер</button></footer>
           </form>
         </dialog>
-        <dialog class="controller-dialog glass-card controller-editor" id="controller-file-dialog" aria-labelledby="controller-file-title">
-          <header><h2 id="controller-file-title">Файл сервера</h2><button class="modal-close" type="button" data-workspace-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
+        <dialog class="modal controller-editor" id="controller-file-dialog" aria-labelledby="controller-file-title">
+          <header class="modal-head"><div class="creation-heading"><span class="step" aria-hidden="true"><svg class="icon"><use href="#i-edit"/></svg></span><h2 id="controller-file-title">Файл сервера</h2></div><button class="modal-close" type="button" data-workspace-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
           <form id="controller-file-form">
-            <label class="form-field"><span>Содержимое UTF-8</span><textarea id="controller-file-text" spellcheck="false" wrap="off"></textarea></label>
+            <label class="form-field"><span>Содержимое файла</span><textarea id="controller-file-text" spellcheck="false" wrap="off"></textarea></label>
+            <p class="controller-help" id="controller-file-hint"></p>
             <p class="content-error" id="controller-file-error" role="alert" hidden></p>
-            <footer><button class="text-button" type="button" data-workspace-close>Закрыть</button><button class="button button-primary" id="controller-file-save" type="submit">Сохранить</button></footer>
+            <footer class="modal-actions"><button class="button button-secondary" type="button" data-workspace-close>Закрыть</button><button class="button button-primary" id="controller-file-save" type="submit"><svg class="icon"><use href="#i-check"/></svg>Сохранить</button></footer>
           </form>
         </dialog>
         <dialog class="controller-dialog glass-card" id="controller-folder-dialog" aria-labelledby="controller-folder-title">

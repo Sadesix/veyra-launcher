@@ -158,9 +158,17 @@
       for (const input of configInputs) input.disabled = !writable || !rules;
       disable('rules-reset', !writable || !rules);
       disable('rules-save', !writable || !rules);
+      if (el('file-dialog').open) {
+        const editable = file?.worldId === world?.id && (writable || (usable && world.status === 'ready' && file.liveConfig));
+        el('file-text').readOnly = !editable;
+        disable('file-save', !editable);
+        el('file-hint').textContent = stopped(world) ? 'Текст UTF-8' : file?.liveConfig ?
+          'Для применения настроек может потребоваться перезапуск сервера.' :
+          'Остановите сервер, чтобы сохранить изменения в этом файле.';
+      }
       if (!world) return;
       el('config-hint').textContent = stopped(world) ? configFeedback : 'Остановите сервер, чтобы изменить настройки или удалить данные.';
-      el('files-hint').textContent = fileFeedback || (stopped(world) ? '' : 'Файлы доступны для просмотра и скачивания. Для изменений остановите сервер.');
+      el('files-hint').textContent = fileFeedback || (stopped(world) ? '' : 'Конфиги модов можно сохранить во время работы сервера.');
     }
 
     function show(id, focus) {
@@ -175,12 +183,10 @@
     };
     async function openFile(path) {
       const data = await call('read-file', { path });
-      file = { path, etag: data.etag };
+      file = { path, worldId: get().world.id, etag: data.etag, liveConfig: data.liveConfig,
+        crlf: data.text.includes('\r\n') && !/(?<!\r)\n/.test(data.text) };
       el('file-title').textContent = path;
       el('file-text').value = data.text;
-      const writable = stopped(get().world);
-      el('file-text').readOnly = !writable;
-      hide('file-save', !writable);
       message('file-error');
       show('file', 'file-text');
     }
@@ -275,9 +281,12 @@
       event.preventDefault();
       run(async () => {
         const { host, world } = get();
-        await api.controllerFileSave(host, world.id, file.path, el('file-text').value, file.etag);
+        if (file?.worldId !== world?.id) throw new Error('Сервер изменился. Откройте файл заново.');
+        const text = el('file-text').value;
+        await api.controllerFileSave(host, world.id, file.path, file.crlf ? text.replaceAll('\n', '\r\n') : text, file.etag);
         close('file');
         await loadFiles();
+        fileFeedback = 'Файл сохранён · ' + file.path;
       }, 'file-error');
     });
     el('rules-form').addEventListener('submit', event => {

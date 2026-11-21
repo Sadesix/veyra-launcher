@@ -477,7 +477,8 @@ def read_file(root, name):
             text = content.decode('utf-8')
         except UnicodeDecodeError as error:
             raise ControllerError('Редактор открывает файлы UTF-8. Этот файл можно скачать') from error
-        return {'text': text, 'etag': hashlib.sha256(content).hexdigest()}
+        return {'text': text, 'etag': hashlib.sha256(content).hexdigest(),
+                'liveConfig': is_mod_config(root, parts)}
 
 
 def property_data(root):
@@ -585,6 +586,11 @@ def level_folder(root):
 def require_stopped(world_id):
     if states().get(world_id, 'stopped') not in ('stopped', 'error'):
         raise ControllerError('Остановите сервер перед изменением файлов или переносом')
+
+
+def is_mod_config(root, parts):
+    return (len(parts) >= 2 and parts[0] in ('config', 'defaultconfigs') or
+            len(parts) >= 3 and parts[1] == 'serverconfig' and parts[0] == level_folder(root))
 
 
 def trash_directory(world, kind):
@@ -766,7 +772,12 @@ def upload_file(stream):
     parts = path_parts(request['path'])
     length = integer(request, 'size', 0, MAX_PACK_BYTES, 'Недопустимый размер файла')
     world = get_world(request['worldId'])
-    require_stopped(world['id'])
+    etag = request.get('etag')
+    if etag is not None:
+        if not isinstance(etag, str) or not re.fullmatch(r'[0-9a-f]{64}', etag) or length > MAX_TEXT_BYTES:
+            raise ControllerError('Откройте текстовый файл до 1 МБ перед сохранением')
+    else:
+        require_stopped(world['id'])
     if length * 2 > shutil.disk_usage(ROOT).free:
         raise ControllerError('На ВМ не хватает места для загрузки')
     with tempfile.TemporaryFile(dir=ROOT) as staging:
@@ -774,14 +785,27 @@ def upload_file(stream):
         if stream.read(1):
             raise ControllerError('Размер файла не совпал')
         staging.seek(0)
+        if etag is not None:
+            content = staging.read()
+            try:
+                content.decode('utf-8')
+            except UnicodeDecodeError as error:
+                raise ControllerError('Сохранять можно только текст UTF-8') from error
+            if b'\0' in content:
+                raise ControllerError('Сохранять можно только текст UTF-8')
+            staging.seek(0)
         with (ROOT / 'control.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             world = get_world(world['id'])
-            require_stopped(world['id'])
-            root = ensure_workspace(world)
+            status = states().get(world['id'], 'stopped')
+            root = state_path(world)
+            if status in ('stopped', 'error'):
+                root = ensure_workspace(world)
+            elif status != 'ready' or etag is None or not is_mod_config(root, parts):
+                raise ControllerError('Остановите сервер перед изменением этого файла')
             with directory_fd(root) as root_fd, directory_fd(root, parts[:-1]) as fd:
                 replace_file(fd, parts[-1], lambda out: copy_exact(staging, out, length), os.fstat(root_fd),
-                             request.get('replace') is True, request.get('etag'))
+                             request.get('replace') is True, etag)
     return True
 
 

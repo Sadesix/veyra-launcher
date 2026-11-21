@@ -107,6 +107,10 @@
 .controller-danger-zone { border-top: 1px solid var(--rack-edge); padding-top: 15px; margin-top: 17px; }
 .controller-danger-zone .controller-help { margin-bottom: 12px; }
 .controller-editor { width: min(880px, calc(100vw - 28px)); }
+.controller-editor .creation-heading { margin: 0; min-width: 0; }
+.controller-editor .modal-close { flex: none; }
+.controller-editor .form-field { margin: 18px 0 8px; }
+.controller-editor .modal-actions { flex-wrap: wrap; }
 .controller-editor h2 { overflow-wrap: anywhere; }
 .controller-editor textarea { min-height: min(54vh, 430px); padding: 12px; resize: vertical; color: var(--cream-dim); background: var(--plum-950); font: 13px/1.5 var(--mono, monospace); user-select: text; }
 .controller-trash-row { grid-template-columns: minmax(0, 1fr) auto; padding-block: 7px; }
