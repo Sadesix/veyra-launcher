@@ -396,7 +396,7 @@
         <dialog class="controller-dialog glass-card" id="controller-transfer-dialog" aria-labelledby="controller-transfer-title">
           <header><h2 id="controller-transfer-title">Перенос</h2><button class="modal-close" type="button" data-workspace-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
           <form id="controller-transfer-form">
-            <label class="form-field"><span>Содержимое</span><select id="controller-transfer-kind"><option value="build">Сборка</option><option value="world">Мир</option><option value="both">Мир и сборка</option></select></label>
+            <label class="form-field"><span>Содержимое</span><select id="controller-transfer-kind"><option value="build">Сборка</option><option value="mods" hidden disabled>Только моды (JAR)</option><option value="world">Мир</option><option value="both">Мир и сборка</option></select></label>
             <label class="form-field" id="controller-transfer-source-field"><span>Источник</span><select id="controller-transfer-source"><option value="library">Библиотека лаунчера</option><option value="zip">Архив ZIP</option></select></label>
             <label class="form-field" id="controller-transfer-build-field"><span>Сборка</span><select id="controller-transfer-build"></select></label>
             <label class="form-field" id="controller-transfer-save-field" hidden><span>Одиночное сохранение</span><select id="controller-transfer-save"></select></label>

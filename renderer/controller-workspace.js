@@ -148,7 +148,8 @@
         changeTab('console');
       }
       for (const button of tabs) button.disabled = !usable;
-      for (const id of ['transfer-upload', 'transfer-download', 'folder-add', 'file-upload', 'file-replace', 'delete-server']) disable(id, !writable);
+      for (const id of ['transfer-upload', 'folder-add', 'file-upload', 'file-replace', 'delete-server']) disable(id, !writable);
+      disable('transfer-download', !usable);
       disable('file-up', !folder || !usable);
       disable('file-refresh', !usable);
       for (const button of el('files-list').querySelectorAll('button')) button.disabled = !usable;
@@ -201,11 +202,18 @@
       for (const entry of data) {
         const row = create('div', 'controller-file-row');
         const name = create('button', 'controller-file-name');
+        const jar = entry.kind === 'file' && /\.jar(?:\.disabled)?$/i.test(entry.name);
         name.type = 'button';
-        name.title = entry.name;
-        name.append(glyph(entry.kind === 'directory' ? 'folder' : 'edit'), create('span', '', entry.name));
+        name.title = jar ? 'Скачать ' + entry.name : entry.name;
+        name.append(glyph(entry.kind === 'directory' ? 'folder' : jar ? 'download' : 'edit'), create('span', '', entry.name));
         const target = join(path, entry.name);
-        name.addEventListener('click', () => run(() => entry.kind === 'directory' ? loadFiles(target) : openFile(target)));
+        const saveFile = () => run(async () => {
+          fileFeedback = '';
+          if (await download('file', target)) fileFeedback = 'Файл скачан · ' + entry.name;
+        });
+        if (entry.kind === 'directory') name.addEventListener('click', () => run(() => loadFiles(target)));
+        else if (jar) name.addEventListener('click', saveFile);
+        else name.addEventListener('click', () => run(() => openFile(target)));
         row.append(name);
         if (entry.kind === 'file') {
           const size = create('span', 'controller-file-size', Intl.NumberFormat('ru-RU').format(Math.ceil(entry.size / 1024)) + ' КБ');
@@ -213,10 +221,7 @@
           save.type = 'button'; save.setAttribute('aria-label', 'Скачать ' + entry.name);
           save.title = 'Скачать';
           save.append(glyph('download'));
-          save.addEventListener('click', () => run(async () => {
-            fileFeedback = '';
-            if (await download('file', target)) fileFeedback = 'Файл скачан · ' + entry.name;
-          }));
+          save.addEventListener('click', saveFile);
           row.append(size, save);
         }
         el('files-list').append(row);
@@ -319,7 +324,9 @@
       hide('transfer-all-field', true);
       el('transfer-mod-list').replaceChildren();
       el('transfer-hint').textContent = direction === 'upload' ?
-        'Заменяемые файлы останутся в резервной копии на ВМ.' : 'Архив ZIP будет сохранён на этом ПК.';
+        'Заменяемые файлы останутся в резервной копии на ВМ.' :
+        stopped(get().world) ? 'Архив ZIP будет сохранён на этом ПК.' :
+        'Моды и сборку можно скачать сразу. Для скачивания мира остановите сервер.';
       if (!library) { transferReady = true; disable('transfer-submit', false); return; }
       const { world } = get();
       const picker = el('transfer-build');
@@ -365,6 +372,13 @@
         const uploading = action === 'upload';
         if (uploading) builds = (await api.getState()).instances.filter(build => build.installed);
         el('transfer-form').reset();
+        const kind = el('transfer-kind');
+        const mods = kind.querySelector('[value="mods"]');
+        mods.hidden = mods.disabled = uploading;
+        for (const option of kind.options) {
+          if (['world', 'both'].includes(option.value)) option.disabled = !uploading && !stopped(get().world);
+        }
+        kind.value = uploading ? 'build' : 'mods';
         el('transfer-title').textContent = uploading ? 'Загрузить на сервер' : 'Скачать с сервера';
         el('transfer-submit').textContent = uploading ? 'Загрузить' : 'Скачать ZIP';
         hide('transfer-source-field', !uploading);
@@ -394,7 +408,10 @@
         submit.textContent = uploading ? 'Загружаем…' : 'Скачиваем…';
         try {
           if (!uploading) {
-            if (await download(mode)) close('transfer');
+            if (await download(mode)) {
+              fileFeedback = 'Архив скачан.';
+              close('transfer');
+            }
             return;
           }
           const result = await api.controllerReplaceBuild(host, world.id, {

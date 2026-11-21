@@ -829,19 +829,26 @@ def write_backup(zip_file, root, parts, arcname):
 
 def download_files(request, output):
     world = get_world(request['worldId'])
-    if request['kind'] == 'file':
+    kind = request['kind']
+    if kind == 'file':
         parts = path_parts(request['path'])
         with directory_fd(state_path(world), parts[:-1]) as fd, regular_file(fd, parts[-1]) as (file, _):
             shutil.copyfileobj(file, output, 1024 ** 2)
         return
     with (ROOT / 'control.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        require_stopped(world['id'])
-        root = ensure_workspace(world)
-        directories = transfer_mode(request['kind'])
-        level = level_folder(root)
-        if 'world' in directories and not (root / level / 'level.dat').is_file():
-            raise ControllerError('На сервере ещё нет сохранения мира')
+        world = get_world(world['id'])
+        directories = {'mods'} if kind == 'mods' else transfer_mode(kind)
+        status = states().get(world['id'], 'stopped')
+        if 'world' in directories:
+            require_stopped(world['id'])
+        root = ensure_workspace(world) if status in ('stopped', 'error') else state_path(world)
+        if 'world' in directories:
+            level = level_folder(root)
+            if not (root / level / 'level.dat').is_file():
+                raise ControllerError('На сервере ещё нет сохранения мира')
+        if kind == 'mods' and not (root / 'mods').is_dir():
+            raise ControllerError('На сервере нет папки mods')
         with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=1) as archive:
             metadata = {key: world.get(key, default) for key, default in
                         [('minecraftVersion', ''), ('loader', 'vanilla'), ('loaderVersion', '')]}

@@ -1944,7 +1944,7 @@ function registerIpc() {
     return sent;
   });
   ipcMain.handle('launcher:controller-download', async (_event, host, world, kind, name) => {
-    const labels = { build: 'сборка', world: 'мир', both: 'сборка-и-мир' };
+    const labels = { mods: 'моды', build: 'сборка', world: 'мир', both: 'сборка-и-мир' };
     if (kind !== 'file' && !Object.hasOwn(labels, kind)) throw new Error('Неизвестный тип скачивания');
     const raw = kind === 'file' ? path.basename(typeof name === 'string' ? name : '') :
       (await controller.target(host, world)).name + ' - ' + labels[kind] + '.zip';
