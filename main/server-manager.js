@@ -18,6 +18,15 @@ const sodiumEntries = [
   'net/caffeinemc/mods/sodium/client/SodiumClientMod.class',
   'me/jellysquid/mods/sodium/client/SodiumClientMod.class',
 ];
+const knownNeoForgeServerMods = new Set(['thaumaturge', 'thaumic_goggles']);
+
+function forgeModIds(manifest) {
+  return manifest.split(/^[ \t]*\[\[mods\]\][ \t]*(?:#.*)?\r?$/m).slice(1).map(section => {
+    const fields = section.split(/^[ \t]*\[/m, 1)[0];
+    return fields.match(/^[ \t]*modId[ \t]*=[ \t]*(["'])([a-z0-9_]+)\1[ \t]*(?:#.*)?\r?$/m)?.[2];
+  });
+}
+
 async function declaredServerSide(file, loader) {
   const zip = await open(file, { lazyEntries: true, autoClose: false });
   try {
@@ -41,8 +50,10 @@ async function declaredServerSide(file, loader) {
       const header = text.split(/^\s*\[/m, 1)[0];
       if (loader === 'forge' && /^\s*clientSideOnly\s*=\s*true\s*(?:#.*)?$/m.test(header)) return 'unsupported';
       // NeoForge Sodium includes a graphics bootstrap service that runs before the mod loader checks sides.
-      if (/^[ \t]*modId\s*=\s*["']sodium["']\s*(?:#.*)?$/m.test(text) &&
+      const ids = forgeModIds(text);
+      if (ids.includes('sodium') &&
           entries.some(item => sodiumEntries.includes(item.fileName))) return 'unsupported';
+      if (loader === 'neoforge' && ids.some(id => knownNeoForgeServerMods.has(id))) return 'required';
     }
     return '';
   }
@@ -101,7 +112,7 @@ class ServerManager {
         try { side = cache[key] || (await this.json('https://api.modrinth.com/v2/project/' + encodeURIComponent(record.projectId), signal)).server_side || ''; if (side) cache[key] = side; } catch { signal.throwIfAborted(); }
       }
       const declared = await declaredServerSide(path.join(root, file.name), instance.loader).catch(() => '');
-      if (declared === 'unsupported' || !side) side = declared;
+      if (declared === 'unsupported' || !side || side === 'unknown') side = declared;
       if (side === 'required' || side === 'optional') eligible.push({ name: file.name, record }); else skipped.push({ name: file.name, reason: side === 'unsupported' ? 'Только для клиента' : 'Серверная совместимость не указана' });
     }
     // Do not copy a dependent mod without its declared required library.

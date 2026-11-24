@@ -31,6 +31,13 @@ async function main() {
     });
     await jar(file('graphics-addon.jar'), { 'META-INF/neoforge.mods.toml': '[[mods]]\nmodId = "client_addon"\n' });
     await jar(file('server-lib.jar'), { 'META-INF/neoforge.mods.toml': '[[mods]]\nmodId = "server_lib"\n' });
+    await jar(file('renamed-content.jar'), { 'META-INF/neoforge.mods.toml': '[[mods]]\nmodId = "thaumaturge"\n' });
+    await jar(file('renamed-addon.jar'), { 'META-INF/neoforge.mods.toml': '[[mods]]\r\nmodId = "thaumic_goggles" # addon\r\n' });
+    await jar(file('thaumaturge-name-only.jar'), {
+      'META-INF/neoforge.mods.toml': '[[mods]]\nmodId = "unknown_addon"\n[[dependencies.unknown_addon]]\nmodId = "thaumaturge"\n',
+    });
+    const addonHash = await fileHash(file('renamed-addon.jar'), 'sha1');
+    await fs.writeFile(path.join(directory, '.veyra-server-sides.json'), JSON.stringify({ ['sha1:' + addonHash]: 'unlisted' }));
     const fromHash = {
       [await fileHash(file('graphics-addon.jar'), 'sha1')]: { project_id: 'client' },
       [await fileHash(file('server-lib.jar'), 'sha1')]: { project_id: 'common' },
@@ -48,14 +55,17 @@ async function main() {
     assert.equal(byName.get('sodium-name-only.jar').verified, false);
     assert.equal(byName.get('graphics-addon.jar').supported, false);
     assert.equal(byName.get('server-lib.jar').verified, true);
+    assert.equal(byName.get('renamed-content.jar').verified, true);
+    assert.equal(byName.get('renamed-addon.jar').verified, true);
+    assert.equal(byName.get('thaumaturge-name-only.jar').verified, false);
     const noLookup = async () => { throw new Error('classified mods should use their persisted decision'); };
     let calls = 0;
     const rejectRepeated = (...args) => { calls++; return noLookup(...args); };
     assert.deepEqual((await inspectBuild(build, rejectRepeated, rejectRepeated)).mods, result.mods);
     assert.equal(calls, 0);
     assert.deepEqual((await inspectBuild(build)).mods, result.mods);
-    const copy = await buildFiles(build, ['renamed-renderer.jar', 'server-lib.jar']);
-    assert.deepEqual(copy.files.map(item => item.remote), ['mods/server-lib.jar']);
+    const copy = await buildFiles(build, ['renamed-renderer.jar', 'server-lib.jar', 'renamed-content.jar', 'renamed-addon.jar']);
+    assert.deepEqual(copy.files.map(item => item.remote), ['mods/server-lib.jar', 'mods/renamed-content.jar', 'mods/renamed-addon.jar']);
     await jar(file('forge-client.jar'), { 'META-INF/mods.toml': 'clientSideOnly = true\n[[mods]]\nmodId="client"\n' });
     await jar(file('fabric-client.jar'), { 'fabric.mod.json': '{"environment":"client"}' });
     assert.equal(await declaredServerSide(file('forge-client.jar'), 'forge'), 'unsupported');
