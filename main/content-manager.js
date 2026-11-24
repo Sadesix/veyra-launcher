@@ -3,7 +3,7 @@ const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { Readable, Transform } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
-const { createWriteStream } = require('node:fs');
+const { createReadStream, createWriteStream } = require('node:fs');
 const { ContentTransaction } = require('./content-transaction');
 
 const KINDS = { mods: { folder: 'mods', type: 'mod', ext: '.jar' }, saves: { folder: 'saves' }, shaders: { folder: 'shaderpacks', type: 'shader', ext: '.zip' }, resourcepacks: { folder: 'resourcepacks', type: 'resourcepack', ext: '.zip' } };
@@ -16,6 +16,16 @@ function safeName(name) {
 function validId(id) { if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(id)) throw new Error('Некорректный ID проекта или версии'); return id; }
 function inside(root, target) { const relative = path.relative(root, target); return relative === '' || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative)); }
 async function exists(file) { return Boolean(await fs.lstat(file).catch(error => { if (error.code === 'ENOENT') return null; throw error; })); }
+async function matchesArtifact(target, artifact) {
+  const info = await fs.lstat(target).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  if (!info?.isFile() || info.size !== artifact.size) return false;
+  const algorithm = artifact.hashes?.sha512 ? 'sha512' : 'sha1';
+  const expected = artifact.hashes?.[algorithm];
+  if (!expected) return false;
+  const hash = createHash(algorithm);
+  for await (const chunk of createReadStream(target)) hash.update(chunk);
+  return hash.digest('hex') === expected.toLowerCase();
+}
 async function plainDirectory(directory, create = false) {
   if (create) await fs.mkdir(directory, { recursive: true });
   const stat = await fs.lstat(directory);
@@ -297,8 +307,30 @@ class ContentManager {
       if (version.files?.some(other => other !== file && other.file_type === 'required-resource-pack')) throw new Error('У «' + project.title + '» есть дополнительный обязательный ресурспак в файлах версии. Добавьте его вручную со страницы проекта');
       if (!file || !safeName(file.filename).toLowerCase().endsWith(KINDS[targetKind].ext) || !Number.isSafeInteger(file.size) || file.size > MAX_FILE || file.size < 0) throw new Error('Неподходящий файл проекта «' + project.title + '»');
       const same = installed.find(item => item.projectId === project.id && item.versionId === version.id);
-      const old = installed.find(item => item.projectId === project.id);
-      const node = { project, version, kind: targetKind, file, dependency, dependencies: [], installed: Boolean(same), disabled: Boolean(same?.file.endsWith('.disabled')), old: old || null };
+      let old = installed.find(item => item.projectId === project.id);
+      let adopted = '';
+      if (!old) {
+        const root = await this.root(instance, targetKind);
+        const names = new Set([file.filename, file.filename + '.disabled']);
+        if (dependency && targetKind === 'mods') {
+          for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+            if (entry.isFile() && /\.jar(?:\.disabled)?$/i.test(entry.name)) names.add(entry.name);
+          }
+        }
+        for (const name of names) {
+          const target = path.join(root, safeName(name));
+          if (installed.some(item => item.kind === targetKind && item.file === name) ||
+            (name.endsWith('.disabled') && await exists(path.join(root, enabledFile(name)))) ||
+            !await matchesArtifact(target, file)) continue;
+          adopted = name;
+          old = { file: name, title: project.title, versionId: version.id };
+          break;
+        }
+      }
+      const current = same?.file || adopted;
+      const node = { project, version, kind: targetKind, file, dependency, dependencies: [], installed: Boolean(current),
+        disabled: Boolean(current?.endsWith('.disabled')), old: old || null, adopted,
+        targetName: current ? enabledFile(current) : file.filename };
       nodes.set(project.id, node);
       for (const requirement of version.dependencies || []) {
         if (requirement.dependency_type !== 'required') continue;
@@ -384,6 +416,9 @@ class ContentManager {
       report({ phase: 'Сохранение', message: 'Добавляем файлы и зависимости', completed: total, total });
       for (const node of plan.nodes) {
         const root = await this.root(instance, node.kind);
+        if (node.adopted && !await matchesArtifact(path.join(root, node.adopted), node.file)) {
+          throw new Error('Файл «' + node.adopted + '» изменился. Проверьте зависимости заново');
+        }
         if (node.installed && !node.disabled) continue;
         if (node.old) {
           const previous = (await this.entry(instance, node.kind, node.old.file)).file;
@@ -392,13 +427,16 @@ class ContentManager {
           backups.push({ previous, backup });
           if (node.installed) await fs.copyFile(backup, path.join(stage, node.project.id));
         }
-        const target = path.join(root, safeName(node.file.filename));
-        if (await exists(target)) throw new Error('Файл появился во время загрузки: ' + node.file.filename);
+        const target = path.join(root, safeName(node.targetName));
+        if (await exists(target)) throw new Error('Файл появился во время загрузки: ' + node.targetName);
         await transaction.move(path.join(stage, node.project.id), target);
       }
       for (const node of plan.nodes) {
         data.items = data.items.filter(item => item.projectId !== node.project.id);
-        data.items.push({ kind: node.kind, file: node.file.filename, source: 'modrinth', projectId: node.project.id, versionId: node.version.id, title: node.project.title, version: node.version.version_number, icon: safeIcon(node.project.icon_url), dependency: node.dependency, dependencies: node.dependencies, incompatibilities: (node.version.dependencies || []).filter(dep => dep.dependency_type === 'incompatible').map(dep => ({ projectId: dep.project_id, versionId: dep.version_id })), installedAt: Date.now() });
+        const sha1 = createHash('sha1');
+        const installedFile = (await this.entry(instance, node.kind, node.targetName)).file;
+        for await (const chunk of createReadStream(installedFile)) sha1.update(chunk);
+        data.items.push({ kind: node.kind, file: node.targetName, source: 'modrinth', projectId: node.project.id, versionId: node.version.id, title: node.project.title, version: node.version.version_number, icon: safeIcon(node.project.icon_url), dependency: node.dependency, dependencies: node.dependencies, incompatibilities: (node.version.dependencies || []).filter(dep => dep.dependency_type === 'incompatible').map(dep => ({ projectId: dep.project_id, versionId: dep.version_id })), serverSide: node.project.server_side, sha1: sha1.digest('hex'), installedAt: Date.now() });
       }
       // Keep old versions in the same recoverable trash as manual removals.
       for (const backup of backups) {

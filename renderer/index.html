@@ -203,7 +203,10 @@
           <header class="controller-head">
             <span class="creation-orbit controller-mark" aria-hidden="true"><svg class="icon"><use href="#i-server"/></svg></span>
             <div><h1 id="controller-title">Veyra Controller<span>.</span></h1><p>Серверы Minecraft на вашей ВМ с Linux</p></div>
-            <button type="button" class="button button-secondary" id="controller-add-host"><svg class="icon"><use href="#i-plus"/></svg>Добавить ВМ</button>
+            <div class="controller-head-actions">
+              <button type="button" class="button button-secondary" id="controller-share-open"><svg class="icon"><use href="#i-download"/></svg>Получить сборку</button>
+              <button type="button" class="button button-secondary" id="controller-add-host"><svg class="icon"><use href="#i-plus"/></svg>Добавить ВМ</button>
+            </div>
           </header>
           <div class="controller-overview" id="controller-overview" hidden>
             <section class="glass-card builder-card controller-host" id="controller-host" aria-labelledby="controller-host-heading">
@@ -251,7 +254,9 @@
                   <label class="switch-field controller-power"><input id="controller-power" type="checkbox" role="switch" aria-label="Питание сервера" /><span class="switch-track"></span><span id="controller-power-label">Сервер выключен</span></label>
                   <button class="button button-primary" id="controller-join" type="button"><svg class="icon"><use href="#i-play"/></svg>Играть</button>
                   <button class="text-button" id="controller-restart" type="button">Перезапустить</button>
+                  <button class="button button-secondary" id="controller-sync-build" type="button"><svg class="icon"><use href="#i-refresh"/></svg>Синхронизация сборки</button>
                 </div>
+                <p class="controller-help" id="controller-sync-feedback" role="status"></p>
                 <div class="segmented controller-tabs" role="group" aria-label="Раздел сервера">
                   <button type="button" data-controller-section="console" aria-pressed="true" aria-controls="controller-section-console"><svg class="icon"><use href="#i-terminal"/></svg>Консоль</button>
                   <button type="button" data-controller-section="files" aria-pressed="false" aria-controls="controller-section-files"><svg class="icon"><use href="#i-folder"/></svg>Файлы</button>
@@ -328,6 +333,15 @@
             </div>
           </div>
         </section>
+        <dialog class="controller-dialog glass-card" id="controller-share-dialog" aria-labelledby="controller-share-title">
+          <header><h2 id="controller-share-title">Сборка сервера</h2><button type="button" class="modal-close" data-controller-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
+          <form id="controller-share-form">
+            <p class="controller-help">Войдите в аккаунт Veyra и введите код от владельца. Лаунчер проверит белый список сервера и будет сверять версию сборки перед запуском.</p>
+            <label class="form-field"><span>Код сборки</span><input id="controller-share-id" required maxlength="32" pattern="[0-9a-fA-F]{32}" autocomplete="off" spellcheck="false" /></label>
+            <p class="content-error" id="controller-share-error" role="alert" hidden></p>
+            <footer><button type="button" class="button button-secondary" data-controller-close>Закрыть</button><button type="submit" class="button button-primary" id="controller-share-submit"><svg class="icon"><use href="#i-download"/></svg>Получить сборку</button></footer>
+          </form>
+        </dialog>
         <dialog class="controller-dialog glass-card" id="controller-host-dialog" aria-labelledby="controller-host-title">
           <header><h2 id="controller-host-title">Добавить ВМ с Linux</h2><button type="button" class="modal-close" data-controller-close aria-label="Закрыть"><svg class="icon"><use href="#i-close"/></svg></button></header>
           <form id="controller-host-form">

@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld('launcher', Object.freeze({
   controllerDownload: (host, world, kind, path) => invoke('controller-download', host, world, kind, path),
   controllerReplaceBuild: (host, world, options) => invoke('controller-replace-build', host, world, options),
   controllerJoin: (id, world) => invoke('controller-join', id, world),
+  controllerSyncBuild: (id, world) => invoke('controller-sync-build', id, world),
+  controllerDownloadShared: code => invoke('controller-download-shared', code),
   shareInspectExport: id => invoke('share-inspect-export', id),
   shareResolveExport: token => invoke('share-resolve-export', token),
   shareSave: (token, mode) => invoke('share-save', token, mode),

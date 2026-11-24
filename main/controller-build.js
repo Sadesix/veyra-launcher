@@ -1,5 +1,6 @@
 const fs = require('node:fs/promises');
 const { createReadStream } = require('node:fs');
+const { randomUUID } = require('node:crypto');
 const path = require('node:path');
 const { declaredServerSide } = require('./server-manager');
 const { fileHash } = require('./modpacks');
@@ -22,17 +23,29 @@ async function inspectBuild(instance, lookup, lookupHashes) {
   const files = (await directoryEntries(directory)).filter(entry => entry.isFile() && safeName(entry.name) && /\.jar$/i.test(entry.name));
   const installed = await fs.readFile(path.join(instance.directory, '.veyra-content.json'), 'utf8').then(JSON.parse).catch(() => ({ items: [] }));
   const records = new Map((Array.isArray(installed?.items) ? installed.items : []).filter(item => item.kind === 'mods').map(item => [item.file, item]));
+  const cachePath = path.join(instance.directory, '.veyra-server-sides.json');
+  const readCache = async () => {
+    const stat = await fs.lstat(cachePath).catch(() => null);
+    if (!stat?.isFile() || stat.size > 1024 ** 2) return {};
+    return JSON.parse(await fs.readFile(cachePath, 'utf8'));
+  };
+  const cache = await readCache().catch(() => ({})) || {};
+  const decisions = new Map();
+  const validSide = side => ['required', 'optional', 'unsupported', 'unknown'].includes(side);
   const inspected = [];
   for (let offset = 0; offset < files.length; offset += 12) {
     inspected.push(...await Promise.all(files.slice(offset, offset + 12).map(async ({ name }) => {
       const file = path.join(directory, name);
       const declared = instance.loader === 'vanilla' ? 'unsupported' : await declaredServerSide(file, instance.loader).catch(() => '');
-      const projectId = records.get(name)?.projectId;
-      const sha1 = lookupHashes && !projectId && declared !== 'unsupported' ? await fileHash(file, 'sha1').catch(() => '') : '';
-      return { name, projectId, declared, sha1 };
+      const sha1 = declared !== 'unsupported' ? await fileHash(file, 'sha1').catch(() => '') : '';
+      const candidate = records.get(name);
+      const record = sha1 && sha1 === candidate?.sha1 ? candidate : null;
+      const projectId = record?.projectId;
+      return { name, projectId, declared, sha1, recorded: record?.serverSide };
     })));
   }
-  const hashes = [...new Set(inspected.map(mod => mod.sha1).filter(Boolean))];
+  const hashes = lookupHashes ? [...new Set(inspected.filter(mod => !mod.projectId && mod.sha1 &&
+    !validSide(cache['sha1:' + mod.sha1]) && cache['sha1:' + mod.sha1] !== 'unlisted').map(mod => mod.sha1))] : [];
   const versions = new Map();
   for (let offset = 0; offset < hashes.length; offset += 200) {
     const batch = hashes.slice(offset, offset + 200);
@@ -40,20 +53,36 @@ async function inspectBuild(instance, lookup, lookupHashes) {
     for (const sha1 of batch) {
       const id = found?.[sha1]?.project_id;
       if (typeof id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(id)) versions.set(sha1, id);
+      else if (found) decisions.set('sha1:' + sha1, 'unlisted');
     }
   }
   const projects = new Map();
   const mods = [];
   for (let offset = 0; offset < inspected.length; offset += 12) {
-    mods.push(...await Promise.all(inspected.slice(offset, offset + 12).map(async ({ name, declared, projectId, sha1 }) => {
+    mods.push(...await Promise.all(inspected.slice(offset, offset + 12).map(async ({ name, declared, projectId, sha1, recorded }) => {
       const id = projectId || versions.get(sha1);
-      if (lookup && id && declared !== 'unsupported' && !projects.has(id)) {
+      const cached = cache['sha1:' + sha1] || (id ? cache['project:' + id] : '');
+      if (lookup && id && declared !== 'unsupported' && !validSide(cached) && !validSide(recorded) && !projects.has(id)) {
         projects.set(id, lookup(id).then(project => project?.server_side, () => ''));
       }
-      const side = await projects.get(id);
+      const side = validSide(cached) ? cached : validSide(recorded) ? recorded : await projects.get(id);
+      if (validSide(side)) {
+        if (sha1) decisions.set('sha1:' + sha1, side);
+        if (id) decisions.set('project:' + id, side);
+      }
       const supported = side !== 'unsupported' && declared !== 'unsupported';
       return { name, supported, verified: supported && (['required', 'optional'].includes(side) || declared === 'required') };
     })));
+  }
+  if (lookup && [...decisions].some(([key, side]) => cache[key] !== side)) {
+    const updated = { ...await readCache().catch(() => ({})), ...Object.fromEntries(decisions) };
+    const temporary = cachePath + '.' + randomUUID();
+    try {
+      await fs.writeFile(temporary, JSON.stringify(updated), { flag: 'wx' });
+      await fs.rename(temporary, cachePath);
+    } finally {
+      await fs.rm(temporary, { force: true }).catch(() => {});
+    }
   }
   const worlds = [];
   for (const entry of await directoryEntries(path.join(instance.directory, 'saves'))) {

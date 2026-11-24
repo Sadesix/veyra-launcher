@@ -341,7 +341,7 @@ class VeyraController {
   }
 
   workspace(id, worldId, action, options = {}) {
-    if (!['files', 'read-file', 'game-rules', 'save-rules', 'save-config', 'mkdir', 'delete-world', 'delete-server', 'trash', 'restore', 'purge'].includes(action)) {
+    if (!['files', 'read-file', 'game-rules', 'save-rules', 'save-config', 'mkdir', 'delete-world', 'delete-server', 'trash', 'restore', 'purge', 'share-worker', 'share-worker-disable'].includes(action)) {
       throw new Error('Неизвестное действие файловой панели');
     }
     if (!['trash', 'restore', 'purge'].includes(action) && !validWorld(worldId)) throw new Error('Выберите сервер');
@@ -388,7 +388,7 @@ class VeyraController {
 
   async replaceBuild(id, worldId, mode, archive, sourceId, progress, signal) {
     const { buildStream } = require('./controller-build');
-    const header = { worldId, mode, compatibility: archive.compatibility, sourceId };
+    const header = { worldId, mode, compatibility: archive.compatibility, revision: archive.revision, sourceId };
     return this.fileChannel(id, 'replace-build', header, buildStream(header, archive, progress, signal), signal);
   }
 

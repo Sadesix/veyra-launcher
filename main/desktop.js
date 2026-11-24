@@ -30,6 +30,7 @@ const { VeyraController, endpoint } = require('./veyra-controller');
 const { inspectBuild, buildFiles } = require('./controller-build');
 const { readControllerArchive } = require('./controller-archive');
 const { inspectExport, resolveExport, exportBuild, inspectShare } = require('./build-share');
+const syncedBuilds = require('./build-sync');
 const { Updater, MODES: UPDATE_MODES, newer, fileHash } = require('./updater');
 const updateConfig = require('./update-config.json');
 const { detectInstall, readInstallState, runSetup, cleanupInstall } = require('./install-mode');
@@ -74,6 +75,7 @@ let window;
 let settings;
 let manifest = { latest: {}, versions: [] };
 let activeOperation = null;
+let controllerSyncBusy = false;
 let gameProcess = null;
 const games = new Map();
 // Поиск клиентов, оставшихся от прошлого запуска лаунчера: запуск новой игры ждёт его, чтобы не занять их папки и ники.
@@ -271,6 +273,7 @@ function sanitizeInstance(raw) {
     legacy: Boolean(raw.legacy),
     modpack: packRecord(raw.modpack),
     sharePending: raw.sharePending === true,
+    sharedServerId: syncedBuilds.ID.test(raw.sharedServerId || '') ? raw.sharedServerId : '',
     installed: false,
   };
 }
@@ -1450,6 +1453,7 @@ async function launchInstance(id, connect = false) {
   if (authController) throw new Error('Завершите Microsoft-вход или отмените его перед запуском');
   const operation = beginOperation('launch', id);
   try {
+    if (instance.sharedServerId) await refreshSharedInstance(instance, operation.signal);
     if (connect === true && (!server.run || server.state.status !== 'ready' || server.state.instanceId !== id)) throw new Error('Сначала запустите сервер этой сборки и дождитесь готовности');
     const target = connect === true ? { host: '127.0.0.1', port: server.state.port, veyraLogin: server.state.config?.veyraLogin } : connect;
     const mode = settings.accountMode;
@@ -1789,7 +1793,112 @@ async function changeContent(id, label, callback, cancellable = false) {
     if (operation.signal.aborted) { status('Добавление отменено'); return { cancelled: true }; }
     reportError('Содержимое сборки', error);
     throw error;
-  } finally { endOperation(operation); }
+  } finally {
+    endOperation(operation);
+    void syncControllerLinks().catch(error => log('Синхронизация сборок: ' + errorMessage(error)));
+  }
+}
+
+function controllerSyncFile() { return path.join(app.getPath('userData'), 'controller-build-sync.json'); }
+
+async function linkedMods(instance) {
+  await content.recover(instance);
+  const root = await content.root(instance, 'mods');
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const mods = await Promise.all(entries.filter(entry => entry.isFile() && /\.jar$/i.test(entry.name))
+    .map(async entry => {
+      const info = await fs.lstat(path.join(root, entry.name));
+      return [entry.name, info.size, info.mtimeMs];
+    }));
+  return JSON.stringify(mods.sort(([left], [right]) => left.localeCompare(right)));
+}
+
+async function sendControllerMods(link, instance, stamp) {
+  const inspected = await inspectBuild(instance, project => content.cached('/project/' + encodeURIComponent(project)),
+    hashes => modpacks.api('/version_files', { method: 'POST', body: { hashes, algorithm: 'sha1' } }));
+  const files = await buildFiles(instance, inspected.mods.filter(mod => mod.verified).map(mod => mod.name), '', []);
+  files.compatibility = { minecraftVersion: instance.minecraftVersion, loader: instance.loader, loaderVersion: instance.loaderVersion };
+  files.revision = createHash('sha256').update(stamp).digest('hex');
+  if (stamp !== await linkedMods(instance)) throw new Error('Моды изменились во время подготовки. Повторите синхронизацию.');
+  await controller.attach(link.host);
+  const result = await controller.replaceBuild(link.host, link.world, 'mods', files, instance.id, () => {}, AbortSignal.timeout(15 * 60 * 1000));
+  link.stamp = stamp;
+  link.revision = files.revision;
+  const skipped = inspected.mods.filter(mod => !mod.verified).map(mod => mod.name).concat(result.skipped || []);
+  status((result.queued ? 'Моды загружены и применятся при следующем запуске сервера' : 'Моды сервера синхронизированы') +
+    (skipped.length ? ' · исключено ' + skipped.length : ''), 'success');
+  return { ...result, skipped };
+}
+
+async function publishControllerRevision(link, instance) {
+  if (!link.share || link.revision === link.published) return;
+  const target = await controller.target(link.host, link.world);
+  if (target.modsRevision !== link.revision || !target.veyraLogin) return;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'veyra-server-share-'));
+  const file = path.join(dir, 'builder.veyra');
+  try {
+    if (link.stamp !== await linkedMods(instance)) return;
+    await exportBuild(instance, await inspectExport(instance), 'all', file);
+    if (link.stamp !== await linkedMods(instance)) return;
+    const { key } = await controller.workspace(link.host, link.world, 'share-worker');
+    await syncedBuilds.publishArchive(veyra, withVeyra, link.world, key, file, link.revision);
+    link.published = link.revision;
+    status('Обновление сборки доступно игрокам из белого списка', 'success');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+}
+
+async function fetchSharedRevision(serverId, oldHash, signal, use) {
+  const request = callback => withVeyra(callback, signal);
+  const revision = await syncedBuilds.authorizeArchive(veyra, request, serverId, signal);
+  if (revision.hash === oldHash) return null;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'veyra-player-share-'));
+  const file = path.join(dir, 'server.veyra');
+  try {
+    await syncedBuilds.downloadArchive(veyra, request, serverId, revision, file, signal);
+    const plan = await inspectShare(file);
+    if (plan.index.files.length || plan.unresolved.length) throw new Error('Серверная сборка должна содержать все моды в архиве');
+    return await use(file, plan, revision.hash);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+}
+
+async function refreshSharedInstance(instance, signal) {
+  await syncedBuilds.recoverSyncedBuild(instance, readJson);
+  const marker = await readJson(path.join(instance.directory, '.veyra-sync-revision.json'), null);
+  return fetchSharedRevision(instance.sharedServerId, marker?.hash, signal, async (file, { index }, hash) => {
+    if (index.minecraft !== instance.minecraftVersion || index.loader !== instance.loader || index.loaderVersion !== instance.loaderVersion) {
+      throw new Error('Сервер перешёл на другую версию Minecraft или загрузчика. Получите сборку заново.');
+    }
+    if ([...games.values()].some(game => game.instanceId === instance.id) || server.run?.instanceId === instance.id) {
+      throw new Error('Для обновления сборки закройте использующие её клиенты и сервер.');
+    }
+    await syncedBuilds.updateSyncedBuild(instance, file, index, hash, { signal, readJson, atomicJson });
+    status('Сборка обновлена до версии сервера', 'success');
+    return true;
+  });
+}
+
+async function syncControllerLinks() {
+  if (!settings || activeOperation || controllerSyncBusy) return;
+  controllerSyncBusy = true;
+  try {
+    const links = await readJson(controllerSyncFile(), []);
+    if (!Array.isArray(links)) throw new Error('Не удалось прочитать привязки синхронизации');
+    for (const link of links) {
+      if (activeOperation) break;
+      const instance = settings.instances.find(item => item.id === link.instance && item.installed);
+      if (!instance) continue;
+      try {
+        const stamp = await linkedMods(instance);
+        if (stamp !== link.stamp) {
+          await sendControllerMods(link, instance, stamp);
+          await atomicJson(controllerSyncFile(), links);
+        }
+        const published = link.published;
+        await publishControllerRevision(link, instance);
+        if (link.published !== published) await atomicJson(controllerSyncFile(), links);
+      } catch (error) { log('Синхронизация сборки Controller: ' + errorMessage(error)); }
+    }
+  } finally { controllerSyncBusy = false; }
 }
 
 async function importContent(id, kind) {
@@ -1916,6 +2025,7 @@ function registerIpc() {
     } finally { endOperation(operation); }
   });
   ipcMain.handle('launcher:controller-workspace', async (_event, host, world, action, options) => {
+    if (action === 'share-worker' || action === 'share-worker-disable') throw new Error('Управление доступом доступно в синхронизации сборки');
     if (action === 'purge') {
       const entries = await controller.workspace(host, '', 'trash');
       const entry = entries.find(item => item.id === options?.entryId);
@@ -1989,6 +2099,75 @@ function registerIpc() {
   });
   ipcMain.handle('launcher:controller-copy', async (_event, id, world) => {
     clipboard.writeText((await controller.target(id, world)).address);
+  });
+  ipcMain.handle('launcher:controller-sync-build', async (_event, host, world) => {
+    if (controllerSyncBusy || activeOperation) throw new Error('Дождитесь завершения текущей операции');
+    controllerSyncBusy = true;
+    try {
+      const target = await controller.target(host, world);
+      const links = await readJson(controllerSyncFile(), []);
+      if (!Array.isArray(links)) throw new Error('Не удалось прочитать привязки синхронизации');
+      const link = links.find(value => value.host === host && value.world === world);
+      const matches = item => item?.installed && item.minecraftVersion === target.minecraftVersion &&
+        item.loader === target.loader && item.loaderVersion === (target.loaderVersion || '');
+      const instance = settings.instances.find(item => item.id === (link?.instance || target.sourceId) && matches(item)) ||
+        (matches(selectedInstance()) ? selectedInstance() : null);
+      if (!instance) throw new Error('Выберите в библиотеке установленную сборку с той же версией Minecraft и загрузчика.');
+      const decision = await dialog.showMessageBox(window, {
+        type: 'question', title: 'Синхронизация сборки', message: 'Сборка «' + instance.name + '» и сервер «' + target.name + '»',
+        detail: 'Моды отправляются на ВМ, пока лаунчер открыт, и применяются при следующем запуске сервера. Клиентские и непроверенные моды пропускаются. Если открыть доступ игрокам, они получат клиентские JAR, конфиги и скрипты. Проверьте, что эти файлы можно передавать.',
+        buttons: ['Только сервер', 'Сервер и игроки', ...(link ? ['Отключить'] : []), 'Отмена'], cancelId: link ? 3 : 2, noLink: true,
+      });
+      if (link && decision.response === 2) {
+        if (link.share) await controller.workspace(host, world, 'share-worker-disable');
+        await atomicJson(controllerSyncFile(), links.filter(value => value !== link));
+        return { disabled: true };
+      }
+      if (decision.response > 1) return null;
+      const share = decision.response === 1;
+      if (share && (!target.veyraLogin || !veyraSession)) throw new Error('Для доступа игроков включите вход через Veyra на сервере и войдите в аккаунт в лаунчере.');
+      if (link?.share && !share) await controller.workspace(host, world, 'share-worker-disable');
+      const next = { host, world, instance: instance.id, share };
+      const result = await sendControllerMods(next, instance, await linkedMods(instance));
+      const updated = [...links.filter(value => value !== link), next];
+      await atomicJson(controllerSyncFile(), updated);
+      let shareError = '';
+      try {
+        await publishControllerRevision(next, instance);
+        if (next.published) await atomicJson(controllerSyncFile(), updated);
+      } catch (error) { shareError = errorMessage(error); }
+      if (share) clipboard.writeText(world);
+      return { ...result, shared: share, published: Boolean(next.published), shareError };
+    } finally { controllerSyncBusy = false; }
+  });
+  ipcMain.handle('launcher:controller-download-shared', async (_event, input) => {
+    const id = typeof input === 'string' ? input.trim().toLowerCase() : '';
+    if (!syncedBuilds.ID.test(id)) throw new Error('Введите код сборки из Veyra Controller');
+    const existing = settings.instances.find(item => item.sharedServerId === id && item.installed);
+    const operation = beginOperation('controller-transfer', existing?.id || '');
+    operation.cancellable = true;
+    let created;
+    try {
+      if (existing) {
+        if ([...games.values()].some(game => game.instanceId === existing.id)) throw new Error('Закройте Minecraft в этой сборке перед обновлением.');
+        await refreshSharedInstance(existing, operation.signal);
+        created = existing;
+      } else {
+        await fetchSharedRevision(id, '', operation.signal, async (file, { index, note }, hash) => {
+          if (!manifest.versions.some(version => version.id === index.minecraft)) await refreshVersions();
+          endOperation(operation);
+          created = await createInstance({ name: index.name, minecraftVersion: index.minecraft, loader: index.loader,
+            loaderVersion: index.loaderVersion }, { file, note });
+          const instance = requireInstance(created.id);
+          instance.sharedServerId = id;
+          await atomicJson(path.join(instance.directory, '.veyra-sync-revision.json'), { hash });
+          await persist();
+          await installInstance(instance.id);
+        });
+      }
+      if (created) await selectInstance(created.id);
+      return publicState();
+    } finally { if (activeOperation === operation) endOperation(operation); }
   });
   ipcMain.handle('launcher:controller-join', async (_event, id, world) => {
     const target = await controller.target(id, world);
@@ -2302,6 +2481,10 @@ if (primaryLauncher) app.whenReady().then(async () => {
   // Если клиентов найти не удалось, токены не трогаются — ими может играть клиент, о котором лаунчер не знает.
   clientsReady.then(known => { if (known && veyraRevokes.length) revokePending(); });
   scheduleUpdates();
+  const syncTimer = setInterval(() => {
+    void syncControllerLinks().catch(error => log('Синхронизация сборок: ' + errorMessage(error)));
+  }, 45000);
+  syncTimer.unref();
   // Список версий и поиск Java начинаются, когда окно уже на экране, и не отнимают время у первой отрисовки.
   let background = false;
   const startBackground = () => {

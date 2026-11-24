@@ -32,10 +32,14 @@ ROOT = Path('/var/lib/veyra-controller')
 WORLDS = ROOT / 'worlds'
 BUNDLES = ROOT / 'bundles'
 TRASH = ROOT / 'trash'
+PENDING_MODS = ROOT / 'pending-mods'
+SHARE_WORKERS = ROOT / 'share-workers'
 PRIVATE = Path('/var/lib/private')
 CACHE = Path('/var/cache/veyra-controller')
 UNIT = 'veyra-minecraft@'
 UNIT_FILE = Path('/etc/systemd/system') / (UNIT + '.service')
+SHARE_SERVICE = Path('/etc/systemd/system/veyra-build-access.service')
+SHARE_TIMER = SHARE_SERVICE.with_suffix('.timer')
 MANIFEST = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
 WORLD_ID = re.compile(r'[0-9a-f]{32}')
 VERSION_ID = re.compile(r'[0-9A-Za-z][0-9A-Za-z._+-]{0,99}')
@@ -134,6 +138,8 @@ def install(source, account):
         atomic_write(HOME / 'controller.py', source.encode())
         json_file(HOME / 'account.json', account)
         atomic_write(UNIT_FILE, UNIT_TEXT.encode())
+        atomic_write(SHARE_SERVICE, b'[Service]\nType=oneshot\nExecStart=/usr/bin/python3 -I /usr/local/lib/veyra-controller/controller.py share-requests\nNoNewPrivileges=yes\nProtectSystem=strict\nPrivateTmp=yes\n')
+        atomic_write(SHARE_TIMER, b'[Timer]\nOnActiveSec=3s\nOnUnitInactiveSec=8s\nAccuracySec=2s\n[Install]\nWantedBy=timers.target\n')
         systemctl('daemon-reload')
     return {'protocol': PROTOCOL}
 
@@ -243,7 +249,7 @@ def settings(data, previous=None):
               'memoryGb': memory, 'maxPlayers': players, 'veyraLogin': auth,
               'loader': loader, 'loaderVersion': loader_version, 'sourceId': source.get('sourceId', '')}
     if previous:
-        for key in ('hasBundle', 'modCount'):
+        for key in ('hasBundle', 'modCount', 'modsRevision'):
             if key in previous:
                 result[key] = previous[key]
     return result
@@ -624,6 +630,8 @@ def delete_server(world):
     folder, detail = trash_directory(world, 'server')
     config = WORLDS / (world['id'] + '.json')
     move_files([(root, folder / 'state'), (BUNDLES / world['id'], folder / 'bundle'),
+                (PENDING_MODS / world['id'], folder / 'pending-mods'),
+                (SHARE_WORKERS / world['id'], folder / 'share-worker'),
                 (config, folder / 'server.json')], lambda: json_file(folder / 'entry.json', detail))
     return detail
 
@@ -650,6 +658,8 @@ def restore_trash(identifier):
         port_available(server['port'])
         PRIVATE.mkdir(mode=0o700, exist_ok=True)
         move_files([(folder / 'state', state_path(server)), (folder / 'bundle', BUNDLES / server['id']),
+                    (folder / 'pending-mods', PENDING_MODS / server['id']),
+                    (folder / 'share-worker', SHARE_WORKERS / server['id']),
                     (folder / 'server.json', WORLDS / (server['id'] + '.json'))], (folder / 'entry.json').unlink)
         return {'id': server['id']}
     server = get_world(info['serverId'])
@@ -659,7 +669,8 @@ def restore_trash(identifier):
         directories = transfer_mode(info['mode'])
         level = level_folder(root)
         backup, record = trash_directory(server, 'transfer')
-        record.update(mode=info['mode'], modCount=server.get('modCount', 0), sourceId=server.get('sourceId', ''))
+        record.update(mode=info['mode'], modCount=server.get('modCount', 0), sourceId=server.get('sourceId', ''),
+                      modsRevision=server.get('modsRevision', ''))
         backups, replacements = [], []
         for name in sorted(directories):
             target = root / (level if name == 'world' else name)
@@ -671,7 +682,7 @@ def restore_trash(identifier):
         original = config.read_bytes()
         def commit():
             if info['mode'] != 'world':
-                server.update(modCount=info['modCount'], sourceId=info['sourceId'])
+                server.update(modCount=info['modCount'], sourceId=info['sourceId'], modsRevision=info.get('modsRevision', ''))
                 json_file(config, server)
             try:
                 json_file(backup / 'entry.json', record)
@@ -704,7 +715,7 @@ def purge_trash(identifier):
 
 
 def transfer_mode(mode):
-    allowed = {'build': BUILD_DIRS, 'world': {'world'}, 'both': PACK_DIRS}
+    allowed = {'build': BUILD_DIRS, 'world': {'world'}, 'both': PACK_DIRS, 'mods': {'mods'}}
     if mode not in allowed:
         raise ControllerError('Выберите тип переноса')
     return allowed[mode]
@@ -715,6 +726,8 @@ def replace_build(stream):
     world_id = request['worldId']
     directories = transfer_mode(request['mode'])
     get_world(world_id)
+    if request['mode'] == 'mods':
+        return receive_mod_update(stream, request, world_id)
     require_stopped(world_id)
     with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
         stage = Path(temporary) / 'new'
@@ -743,7 +756,8 @@ def replace_build(stream):
             for child in [stage, *stage.rglob('*')]:
                 os.chown(child, owner.st_uid, owner.st_gid, follow_symlinks=False)
             folder, detail = trash_directory(world, 'transfer')
-            detail.update(mode=request['mode'], modCount=world.get('modCount', 0), sourceId=world.get('sourceId', ''))
+            detail.update(mode=request['mode'], modCount=world.get('modCount', 0), sourceId=world.get('sourceId', ''),
+                          modsRevision=world.get('modsRevision', ''))
             backups, new = [], []
             for name in sorted(directories):
                 target = root / (level if name == 'world' else name)
@@ -757,6 +771,7 @@ def replace_build(stream):
                 if request['mode'] != 'world':
                     world['modCount'] = mods - len(skipped)
                     world['sourceId'] = request.get('sourceId', '')
+                    world.pop('modsRevision', None)
                     json_file(config, world)
                 try:
                     json_file(folder / 'entry.json', detail)
@@ -765,6 +780,75 @@ def replace_build(stream):
                     raise
             move_files(backups + new, commit)
     return {'id': world_id, 'archive': detail['id'], 'skipped': skipped}
+
+
+def apply_mod_update(world, pending):
+    root = ensure_workspace(world)
+    active = root / 'mods'
+    if active.is_symlink() or (active.exists() and not active.is_dir()):
+        raise ControllerError('Папка mods должна быть обычной папкой')
+    with directory_fd(root) as fd:
+        owner = os.fstat(fd)
+    backup, detail = trash_directory(world, 'transfer')
+    detail.update(mode='mods', modCount=world.get('modCount', 0), sourceId=world.get('sourceId', ''),
+                  modsRevision=world.get('modsRevision', ''))
+    config = WORLDS / (world['id'] + '.json')
+    original = config.read_bytes()
+    updated = {**world, **json.loads((pending / 'update.json').read_text(encoding='utf-8'))}
+    def commit():
+        json_file(config, updated)
+        try:
+            json_file(backup / 'entry.json', detail)
+        except OSError:
+            atomic_write(config, original)
+            raise
+    # systemd can bind-mount StateDirectory separately from the controller's
+    # spool and trash. Keep both sides of each live rename in StateDirectory.
+    with tempfile.TemporaryDirectory(prefix='.veyra-upload-', dir=root) as temporary:
+        staging = Path(temporary)
+        incoming = shutil.copytree(pending / 'mods', staging / 'incoming', symlinks=True)
+        for entry in [incoming, *incoming.iterdir()]:
+            os.chown(entry, owner.st_uid, owner.st_gid, follow_symlinks=False)
+        if active.is_dir():
+            archived = shutil.copytree(active, backup / 'mods', symlinks=True)
+            for entry in [archived, *archived.rglob('*')]:
+                original_entry = (active / entry.relative_to(archived)).lstat()
+                os.chown(entry, original_entry.st_uid, original_entry.st_gid, follow_symlinks=False)
+        move_files([(active, staging / 'previous'), (incoming, active)], commit)
+    shutil.rmtree(pending)
+
+
+def receive_mod_update(stream, request, world_id):
+    source_id = request.get('sourceId')
+    revision = request.get('revision')
+    if not isinstance(source_id, str) or not re.fullmatch(r'[0-9a-zA-Z-]{1,80}', source_id):
+        raise ControllerError('Выберите локальную сборку')
+    if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{64}', revision):
+        raise ControllerError('Некорректная ревизия модов')
+    PENDING_MODS.mkdir(mode=0o700, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=PENDING_MODS) as temporary:
+        stage = Path(temporary) / 'stage'
+        _, count = receive_build(stream, request, stage, {'mods'})
+        (stage / 'mods').mkdir(exist_ok=True)
+        with (ROOT / 'control.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            world = get_world(world_id)
+            compatibility = request.get('compatibility')
+            if not isinstance(compatibility, dict) or any(compatibility.get(key) != world.get(key, default)
+                    for key, default in [('minecraftVersion', ''), ('loader', 'vanilla'), ('loaderVersion', '')]):
+                raise ControllerError('Для синхронизации нужна та же версия Minecraft и загрузчика')
+            skipped = []
+            for mod in (stage / 'mods').iterdir():
+                if not mod.name.lower().endswith('.jar') or client_only_mod(mod, world.get('loader', 'vanilla')):
+                    skipped.append(mod.name)
+                    mod.unlink()
+            json_file(stage / 'update.json', {'modCount': count - len(skipped), 'sourceId': source_id, 'modsRevision': revision})
+            pending = PENDING_MODS / world_id
+            move_files([(pending, Path(temporary) / 'previous'), (stage, pending)], lambda: None)
+            queued = states().get(world_id, 'stopped') not in ('stopped', 'error')
+            if not queued:
+                apply_mod_update(world, pending)
+            return {'id': world_id, 'queued': queued, 'skipped': skipped}
 
 
 def upload_file(stream):
@@ -806,6 +890,8 @@ def upload_file(stream):
             with directory_fd(root) as root_fd, directory_fd(root, parts[:-1]) as fd:
                 replace_file(fd, parts[-1], lambda out: copy_exact(staging, out, length), os.fstat(root_fd),
                              request.get('replace') is True, etag)
+            if parts[0] == 'mods' and world.pop('modsRevision', None):
+                json_file(WORLDS / (world['id'] + '.json'), world)
     return True
 
 
@@ -913,6 +999,62 @@ def snapshot(selected):
     return {'protocol': PROTOCOL, 'vm': vm_status(), 'worlds': worlds, 'details': details}
 
 
+def share_worker(world):
+    if not world.get('veyraLogin'):
+        raise ControllerError('Для выдачи сборки по белому списку включите вход через Veyra')
+    SHARE_WORKERS.mkdir(mode=0o700, exist_ok=True)
+    file = SHARE_WORKERS / world['id']
+    if not file.exists():
+        atomic_write(file, os.urandom(32).hex().encode(), mode=0o600)
+    systemctl('enable', '--now', SHARE_TIMER.name)
+    return {'key': file.read_text(encoding='ascii')}
+
+
+def whitelist_members(world):
+    if not world.get('veyraLogin'):
+        return set()
+    try:
+        with directory_fd(state_path(world)) as fd, regular_file(fd, 'whitelist.json') as (file, info):
+            if info.st_size > MAX_TEXT_BYTES:
+                return set()
+            entries = json.loads(file.read(MAX_TEXT_BYTES + 1))
+    except (OSError, ValueError, ControllerError):
+        return set()
+    if not isinstance(entries, list):
+        return set()
+    ids = (str(entry.get('uuid', '')).lower().replace('-', '') for entry in entries if isinstance(entry, dict))
+    return {value for value in ids if WORLD_ID.fullmatch(value)}
+
+
+def share_requests():
+    root = json.loads((HOME / 'account.json').read_text(encoding='utf-8')).get('api', '')
+    if not isinstance(root, str) or not root.startswith('https://'):
+        return
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+    opener = urllib.request.build_opener(NoRedirect)
+    for file in SHARE_WORKERS.glob('*'):
+        if not WORLD_ID.fullmatch(file.name):
+            continue
+        try:
+            world = get_world(file.name)
+            key = file.read_text(encoding='ascii')
+            def request(action, data):
+                url = root.rstrip('/') + '/veyra/build-sync/' + file.name + '/' + action
+                req = urllib.request.Request(url, json.dumps(data).encode(), {
+                    'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key})
+                with opener.open(req, timeout=5) as reply:
+                    return json.loads(reply.read(MAX_TEXT_BYTES))
+            pending = request('poll', {})
+            jobs = pending.get('jobs', {})
+            if jobs:
+                members = whitelist_members(world) if world.get('modsRevision') and world['modsRevision'] == pending.get('revision') else set()
+                request('approve', {'allowed': [job for job, profile in jobs.items() if profile in members], 'seen': list(jobs)})
+        except (OSError, ValueError, AttributeError, ControllerError):
+            continue
+
+
 def send_command(world_id, command):
     line = command.strip().removeprefix('/')
     if not 1 <= len(line) <= 256 or any(ord(char) < 32 or ord(char) == 127 for char in line):
@@ -952,6 +1094,11 @@ def control(request):
             world = get_world(selected)
             states_now = states()
             status = states_now.get(selected, 'stopped')
+        if action == 'share-worker':
+            return share_worker(world)
+        if action == 'share-worker-disable':
+            (SHARE_WORKERS / selected).unlink(missing_ok=True)
+            return True
         if action in ('create', 'save'):
             if action == 'save' and status not in ('stopped', 'error'):
                 raise ControllerError('Остановите мир перед изменением настроек')
@@ -1263,7 +1410,12 @@ def launcher_args(world, java, jar, cache):
 def prepare_world(world_id):
     # systemd mounts DynamicUser state noexec. The shared runtime lives in a
     # root-owned cache that worlds can read and execute but cannot modify.
-    world = get_world(world_id)
+    with (ROOT / 'control.lock').open('a') as control_lock:
+        fcntl.flock(control_lock, fcntl.LOCK_EX)
+        world = get_world(world_id)
+        pending = PENDING_MODS / world_id
+        if (pending / 'mods').is_dir():
+            apply_mod_update(world, pending)
     with (CACHE / 'assets.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         print('Veyra Controller: Minecraft ' + world['minecraftVersion'], flush=True)
@@ -1322,6 +1474,9 @@ def run_world(world_id):
 
 
 if __name__ == '__main__':
+    if sys.argv[1:] == ['share-requests']:
+        share_requests()
+        sys.exit(0)
     if sys.argv[1:] == ['import-build']:
         response(lambda: import_build(sys.stdin.buffer))
         sys.exit(0)

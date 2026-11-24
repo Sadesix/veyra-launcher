@@ -134,6 +134,7 @@
     el('overview').classList.toggle('has-resources', Boolean(snapshot));
     el('resources').hidden = !snapshot;
     el('add-host').disabled = busy;
+    el('share-open').disabled = busy;
     el('add-host').classList.toggle('button-primary', hosts.list.length === 0);
     el('add-host').classList.toggle('button-secondary', hosts.list.length > 0);
     el('host-select').disabled = busy || !hosts.list.length;
@@ -178,7 +179,7 @@
     el('power').disabled = busy || degraded || item.status === 'stopping';
     el('power-label').textContent = ready || item.status === 'starting' ? 'Сервер включён' : item.status === 'stopping' ? 'Останавливается…' : 'Сервер выключен';
     el('restart').hidden = el('join').hidden = !ready;
-    for (const name of ['restart', 'copy', 'join']) el(name).disabled = busy || degraded;
+    for (const name of ['restart', 'copy', 'join', 'sync-build']) el(name).disabled = busy || degraded;
     el('command').disabled = el('send').disabled = degraded || !ready;
     el('send').disabled ||= busy;
     renderLog(item, details);
@@ -421,7 +422,29 @@
     } catch (error) { message('host-error', error.message); }
   });
   el('key-clear').addEventListener('click', () => keySelection(''));
-  for (const dialog of [el('host-dialog'), el('world-dialog')]) {
+  el('share-open').addEventListener('click', () => {
+    el('share-form').reset();
+    message('share-error');
+    el('share-dialog').showModal();
+    el('share-id').focus();
+  });
+  el('share-form').addEventListener('submit', event => {
+    event.preventDefault();
+    task(async () => {
+      const dialog = el('share-dialog'), button = el('share-submit');
+      setDialogBusy(dialog, true);
+      button.textContent = 'Проверяем доступ и сборку…';
+      try {
+        await api.controllerDownloadShared(el('share-id').value);
+        dialog.close();
+        document.querySelector('.rail-button[data-view="home"]').click();
+      } finally {
+        button.textContent = 'Получить сборку';
+        setDialogBusy(dialog, false);
+      }
+    }, 'share-error');
+  });
+  for (const dialog of [el('host-dialog'), el('world-dialog'), el('share-dialog')]) {
     dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
     for (const button of dialog.querySelectorAll('[data-controller-close]')) button.addEventListener('click', () => dialog.close());
   }
@@ -497,6 +520,18 @@
   });
   el('restart').addEventListener('click', () => task(() => changeWorld('restart', worldId)));
   el('join').addEventListener('click', () => task(() => api.controllerJoin(hosts.connected, worldId)));
+  el('sync-build').addEventListener('click', () => task(async () => {
+    el('sync-feedback').textContent = '';
+    const result = await api.controllerSyncBuild(hosts.connected, worldId);
+    if (!result) return;
+    const text = result.disabled ? 'Синхронизация отключена.' :
+      result.queued ? 'Моды применятся при следующем запуске сервера.' : 'Моды сервера обновлены.';
+    el('sync-feedback').textContent = text +
+      (result.shared ? ' Код сборки скопирован.' : '') +
+      (result.shared && !result.published && !result.shareError ? ' Доступ появится после применения ревизии на сервере.' : '') +
+      (result.shareError ? ' Публикация для игроков: ' + result.shareError : '') +
+      (result.skipped?.length ? ' Пропущены моды: ' + result.skipped.join(', ') : '');
+  }));
   el('copy').addEventListener('click', () => task(async () => {
     await api.controllerCopy(hosts.connected, worldId);
     el('copy').textContent = 'Скопировано';

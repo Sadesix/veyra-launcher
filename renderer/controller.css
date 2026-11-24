@@ -5,6 +5,8 @@
 .controller-head h1 { margin: 0; color: var(--cream); font: clamp(18px, 3vw, 28px)/1.25 var(--mc); word-spacing: -.25em; }
 .controller-head h1 span { color: var(--peach); }
 .controller-head p { margin: 7px 0 0; color: var(--soft); font-size: 13px; }
+.controller-head-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: end; }
+#controller-sync-feedback:not(:empty) { margin-inline: 16px; overflow-wrap: anywhere; }
 .controller-overview { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; margin-bottom: 19px; }
 .controller-overview.has-resources { grid-template-columns: minmax(342px, 1fr) minmax(0, 1.35fr); }
 .controller-host, .controller-resources { min-width: 0; padding: 16px 18px 17px; }
@@ -191,7 +193,7 @@
   .controller-overview.has-resources { grid-template-columns: minmax(0, 1fr); }
   .controller-worlds { max-height: 250px; }
   .controller-head { grid-template-columns: auto minmax(0, 1fr); row-gap: 12px; }
-  .controller-head > button { grid-column: 1 / -1; justify-self: start; }
+  .controller-head-actions { grid-column: 1 / -1; justify-content: start; }
 }
 @media (max-width: 460px) {
   .controller-host-actions { grid-template-columns: minmax(0, 1fr) auto; }

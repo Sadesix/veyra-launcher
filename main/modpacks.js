@@ -358,6 +358,7 @@ class ModpackCatalog {
       data.items.push({
         kind, file: item.parts[1], source: 'modrinth', projectId: project.id, versionId: version.id, title: String(project.title || item.parts[1]).slice(0, 120),
         version: String(version.version_number || '').slice(0, 80), icon: safeIcon(project.icon_url), dependency: false,
+        sha1: item.sha1, serverSide: project.server_side,
         dependencies: [...new Set((version.dependencies || []).filter(dep => dep.dependency_type === 'required' && inPack.has(dep.project_id)).map(dep => dep.project_id))],
         incompatibilities: (version.dependencies || []).filter(dep => dep.dependency_type === 'incompatible').map(dep => ({ projectId: dep.project_id, versionId: dep.version_id })),
         installedAt: Date.now(), pack: true,

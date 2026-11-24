@@ -168,4 +168,4 @@ async function inspectShare(file) {
   } finally { zip.close(); }
 }
 
-module.exports = { inspectExport, resolveExport, exportBuild, inspectShare };
+module.exports = { inspectExport, resolveExport, exportBuild, inspectShare, SHARED_DIRS };

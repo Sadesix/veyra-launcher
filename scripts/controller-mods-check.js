@@ -48,6 +48,12 @@ async function main() {
     assert.equal(byName.get('sodium-name-only.jar').verified, false);
     assert.equal(byName.get('graphics-addon.jar').supported, false);
     assert.equal(byName.get('server-lib.jar').verified, true);
+    const noLookup = async () => { throw new Error('classified mods should use their persisted decision'); };
+    let calls = 0;
+    const rejectRepeated = (...args) => { calls++; return noLookup(...args); };
+    assert.deepEqual((await inspectBuild(build, rejectRepeated, rejectRepeated)).mods, result.mods);
+    assert.equal(calls, 0);
+    assert.deepEqual((await inspectBuild(build)).mods, result.mods);
     const copy = await buildFiles(build, ['renamed-renderer.jar', 'server-lib.jar']);
     assert.deepEqual(copy.files.map(item => item.remote), ['mods/server-lib.jar']);
     await jar(file('forge-client.jar'), { 'META-INF/mods.toml': 'clientSideOnly = true\n[[mods]]\nmodId="client"\n' });
